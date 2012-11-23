@@ -202,9 +202,7 @@ static __global__ void buildOctantSingle(
   const Box<T> childBox = ChildBox(box, warpId);
 
   /* counter in shmem for each of the octant */
-  __shared__ int nPtclChild[8][8];
-  if (laneId < 8)
-    nPtclChild[warpId][laneId] = 0;
+  int nChildren[8] = {0};
 
   assert(blockIdx.x == 0);
 
@@ -251,26 +249,32 @@ static __global__ void buildOctantSingle(
       const int addrB = cellCounter;
       cellCounter += offset.y;
 
+      int subOctant = -1;
       if (use)
       {
-#if 0
-        buff[addrB + offset.x] = p;                  /* stores within L1 cache */
-#else
         ((float4*)buff)[addrB+offset.x] = p;         /* float4 vector stores   */
-#endif
-
         if (nCell > NLEAF)
-        {
-          const int subOctant = Octant(childBox.centre, p.pos);
+          subOctant = Octant(childBox.centre, p.pos);
+      }
+
+      if (nCell > NLEAF)
+      {
 #pragma unroll
-          for (int k = 0; k < 8; k++)
-            nPtclChild[warpId][k] += warpBinReduce(subOctant == k);
-        }
+        for (int k = 0; k < 8; k++)
+          nChildren[k] += warpBinReduce(subOctant == k);
       }
     }
   }
 
   /* done processing particles, store counts atomically in gmem */
+  __shared__ int nPtclChild[8][8];
+
+  if (laneId == 0)
+  {
+#pragma unroll
+    for (int k = 0; k < 8; k++)
+      nPtclChild[warpId][k] = nChildren[k];
+  }
 
   /* number of particles in each cell's subcells */
   const int nSubCell = laneId < 8 ? nPtclChild[warpId][laneId] : 0;
@@ -418,9 +422,7 @@ static __global__ void buildOctant(
   const Box<T> childBox = ChildBox(box, warpId);
 
   /* counter in shmem for each of the octant */
-  __shared__ int nPtclChild[8][8];
-  if (laneId < 8)
-    nPtclChild[warpId][laneId] = 0;
+  int nChildren[8] = {0};
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
@@ -471,21 +473,19 @@ static __global__ void buildOctant(
         if (laneId == 0)
           atomicAdd(&io_words, offset.y*4);
 
+        int subOctant = -1;
         if (use)
         {
-#if 0
-          buff[addrB + offset.x] = p;                  /* stores within L1 cache */
-#else
           ((float4*)buff)[addrB+offset.x] = p;         /* float4 vector stores   */
-#endif
-
           if (nCell > NLEAF)
-          {
-            const int subOctant = Octant(childBox.centre, p.pos);
+            subOctant = Octant(childBox.centre, p.pos);
+        }
+
+        if (nCell > NLEAF)
+        {
 #pragma unroll
-            for (int k = 0; k < 8; k++)
-              nPtclChild[warpId][k] += warpBinReduce(subOctant == k);
-          }
+          for (int k = 0; k < 8; k++)
+            nChildren[k] += warpBinReduce(subOctant == k);
         }
       }
     }
@@ -493,6 +493,14 @@ static __global__ void buildOctant(
 
   /* done processing particles, store counts atomically in gmem */
 
+  __shared__ int nPtclChild[8][8];
+
+  if (laneId == 0)
+  {
+#pragma unroll
+    for (int k = 0; k < 8; k++)
+      nPtclChild[warpId][k] = nChildren[k];
+  }
   if (laneId < 8)
     if (nPtclChild[warpId][laneId] > 0)
       atomicAdd(&octCounter[8+16+warpId*8 + laneId], nPtclChild[warpId][laneId]);
@@ -603,7 +611,9 @@ static __global__ void buildOctant(
         buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
       else
+      {
         buildOctant<NLEAF,T><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
     }
   }
 
