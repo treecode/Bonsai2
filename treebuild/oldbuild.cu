@@ -196,7 +196,8 @@ static __global__ void buildOctant(
   if (laneId < 8)
     nPtclChild[warpId][laneId] = 0;
  
-#if 1 
+#if 0
+#define TWOSTEPS
   volatile __shared__ int shIndex[8][WARP_SIZE];
   int nPtclCntr = 0;
   ParticleLight<T> pTmp;
@@ -244,7 +245,7 @@ static __global__ void buildOctant(
       const int     use = mask && (Octant(box.centre, p.pos) == warpId);
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
-#if 0
+#ifndef TWOSTEPS
       /* if there is at least 1 particle to write, do so */
       if (offset.y > 0)
       {
@@ -268,8 +269,6 @@ static __global__ void buildOctant(
         }
       }
 #else
-#define TWOSTEPS
-
       shIndex[warpId][laneId] = WARP_SIZE;
       if (use && nPtclCntr + offset.x < WARP_SIZE)
         shIndex[warpId][nPtclCntr + offset.x] = laneId;
@@ -408,8 +407,7 @@ static __global__ void buildOctant(
 
       cudaStream_t stream;
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-      if (nEnd1 - nBeg1 > block.x)
-        buildOctant<NLEAF,T><<<grid,block,0,stream>>>(nBeg1, nEnd1, childBox, octCounterN, buff, ptcl, cell+warpId, level+1);
+      buildOctant<NLEAF,T><<<grid,block,0,stream>>>(nBeg1, nEnd1, childBox, octCounterN, buff, ptcl, cell+warpId, level+1);
     }
   }
   else if (octCounter[8+warpId] > 0)
