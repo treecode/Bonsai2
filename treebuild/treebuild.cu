@@ -441,9 +441,7 @@ static __global__ void buildOctant(
 #else
       const ParticleLight<T> p( ((float4*)ptcl)[mask ? addr : nEnd-1] );  /* float4 vector loads */
 #endif
-#if 1
       __syncthreads();    /* seems to help, probably because make more efficient use of L1 cache */
-#endif
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -476,7 +474,11 @@ static __global__ void buildOctant(
         int subOctant = -1;
         if (use)
         {
+#if 0
+          buff[addrB + offset.x] = p;                  /* stores are within L1 cache */
+#else
           ((float4*)buff)[addrB+offset.x] = p;         /* float4 vector stores   */
+#endif
           if (nCell > NLEAF)
             subOctant = Octant(childBox.centre, p.pos);
         }
