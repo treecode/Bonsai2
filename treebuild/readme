@@ -1,0 +1,6 @@
+Tree construction using dynamic parallelism
+
+to compile:
+nvcc -O3 -o treebuild  treebuild.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=32
+
+
