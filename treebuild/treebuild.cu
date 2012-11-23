@@ -205,23 +205,25 @@ static __global__ void buildOctantSingle(
   int nChildren[8] = {0};
 
   assert(blockIdx.x == 0);
+  
+  const float4* ptcl4 = (float4*)ptcl;
+  __out float4* buff4=  (float4*)buff;
+
+  __shared__ float4 dataX[8*WARP_SIZE];
 
   /* process particle array */
-  int addrBase = nBeg;
+  dataX[threadIdx.x] = ptcl4[min(nBeg + threadIdx.x, nEnd-1)];
+  __syncthreads(); 
+
 #pragma unroll
-  for (int k = 0; k < 8; k++, addrBase += WARP_SIZE)  /* process particles in shared memory */
+  for (int k = 0; k < 8; k++)  /* process particles in shared memory */
   {
-    if (addrBase >= nEnd) break;
-    const int  addr = addrBase + laneId;
+    const int locid = (k<<WARP_SIZE2) + laneId;
+    if (nBeg + (k<<WARP_SIZE2) >= nEnd) break;
+    const int  addr = nBeg + locid;
     const bool mask = addr < nEnd;
-#if 0
-    const ParticleLight<T> p = ptcl[mask ? addr : nEnd-1];       /* stream loads */
-#else
-    const ParticleLight<T> p( ((float4*)ptcl)[mask ? addr : nEnd-1] );  /* float4 vector loads */
-#endif
-#if 1
-    __syncthreads();  
-#endif
+
+    const float4 p4 = dataX[locid];
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
     { 
@@ -241,7 +243,8 @@ static __global__ void buildOctantSingle(
 #endif
 
     /* use prefix sums to compute offset to where scatter particles */
-    const int     use = mask && (Octant(box.centre, p.pos) == warpId);
+    const Position<T> pos(p4.x,p4.y,p4.z);
+    const int     use = mask && (Octant(box.centre, pos) == warpId);
     const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
     if (offset.y > 0)
@@ -252,9 +255,9 @@ static __global__ void buildOctantSingle(
       int subOctant = -1;
       if (use)
       {
-        ((float4*)buff)[addrB+offset.x] = p;         /* float4 vector stores   */
+        buff4[addrB+offset.x] = p4;         /* float4 vector stores   */
         if (nCell > NLEAF)
-          subOctant = Octant(childBox.centre, p.pos);
+          subOctant = Octant(childBox.centre, pos);
       }
 
       if (nCell > NLEAF)
@@ -266,8 +269,9 @@ static __global__ void buildOctantSingle(
     }
   }
 
+  __syncthreads();
   /* done processing particles, store counts atomically in gmem */
-  __shared__ int nPtclChild[8][8];
+  int (*nPtclChild)[8] = (int (*)[8])dataX;
 
   if (laneId == 0)
   {
@@ -424,24 +428,27 @@ static __global__ void buildOctant(
   /* counter in shmem for each of the octant */
   int nChildren[8] = {0};
 
+  const float4* ptcl4 = (float4*)ptcl;
+  __out float4* buff4=  (float4*)buff;
+
+  __shared__ float4 dataX[8*WARP_SIZE];
+
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
     if (threadIdx.x == 0)
       atomicAdd(&io_words, 8*WARP_SIZE*4);
+    dataX[threadIdx.x] = ptcl4[min(i + threadIdx.x, nEnd-1)];
+    __syncthreads(); 
 #pragma unroll
     for (int k = 0; k < 8; k++)  /* process particles in shared memory */
     {
+      const int locid = (k<<WARP_SIZE2) + laneId;
       const int  addr = i + (k<<WARP_SIZE2) + laneId;
       const bool mask = addr < nEnd;
 
-#if 0
-      const ParticleLight<T> p = ptcl[mask ? addr : nEnd-1];       /* stream loads */
-#else
-      const ParticleLight<T> p( ((float4*)ptcl)[mask ? addr : nEnd-1] );  /* float4 vector loads */
-#endif
-      __syncthreads();    /* seems to help, probably because make more efficient use of L1 cache */
+      const float4 p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -461,7 +468,8 @@ static __global__ void buildOctant(
 #endif
 
       /* use prefix sums to compute offset to where scatter particles */
-      const int     use = mask && (Octant(box.centre, p.pos) == warpId);
+      const Position<T> pos(p4.x,p4.y,p4.z);
+      const int     use = mask && (Octant(box.centre, pos) == warpId);
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
       if (offset.y > 0)
@@ -474,13 +482,9 @@ static __global__ void buildOctant(
         int subOctant = -1;
         if (use)
         {
-#if 0
-          buff[addrB + offset.x] = p;                  /* stores are within L1 cache */
-#else
-          ((float4*)buff)[addrB+offset.x] = p;         /* float4 vector stores   */
-#endif
+          buff4[addrB+offset.x] = p4;         /* float4 vector stores   */
           if (nCell > NLEAF)
-            subOctant = Octant(childBox.centre, p.pos);
+            subOctant = Octant(childBox.centre, pos);
         }
 
         if (nCell > NLEAF)
@@ -491,11 +495,12 @@ static __global__ void buildOctant(
         }
       }
     }
+    __syncthreads(); 
   }
 
   /* done processing particles, store counts atomically in gmem */
 
-  __shared__ int nPtclChild[8][8];
+  int (*nPtclChild)[8] = (int (*)[8])dataX;
 
   if (laneId == 0)
   {
@@ -948,6 +953,7 @@ static __global__ void buildOctree(
   delete box_ptr;
 }
 
+/* current only works with single precision */
 typedef float real;
 
 int main(int argc, char * argv [])
@@ -1020,7 +1026,7 @@ int main(int argc, char * argv [])
   const int NLEAF = NPERLEAF;
 #endif
 
-#if 1
+#if 0
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferL1));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferL1));
 #elif 1
