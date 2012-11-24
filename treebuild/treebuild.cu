@@ -492,13 +492,12 @@ static __global__ void buildOctant(
         if (laneId == 0)
           atomicAdd(&io_words, offset.y*4);
 
-        int subOctant = -1;
         if (use)
         {
           buff4[addrB+offset.x] = p4;         /* float4 vector stores   */
-          subOctant = Octant(childBox.centre, pos);
+          const int subOctant = Octant(childBox.centre, pos);
 
-          switch(subOctant)
+          switch(subOctant)  /* this way helps to unroll the nChildren into registers */
           {
             case 0: nChildren[0]++; break;
             case 1: nChildren[1]++; break;
@@ -510,13 +509,6 @@ static __global__ void buildOctant(
             case 7: nChildren[7]++; break;
           };
         }
-
-#if 0
-        /* compute number of particles in each octant of the child cell, needed for the next level */
-#pragma unroll
-        for (int k = 0; k < 8; k++)
-          nChildren[k] += warpBinReduce(subOctant == k);
-#endif
       }
     }
     __syncthreads(); 
@@ -527,10 +519,10 @@ static __global__ void buildOctant(
   int (*nPtclChild)[8] = (int (*)[8])dataX;
 
 #pragma unroll
-  for (int k = 0; k < 8; k++)
+  for (int i = 4; i >= 0; i--)
   {
 #pragma unroll
-    for (int i = 4; i >= 0; i--)
+    for (int k = 0; k < 8; k++)
       nChildren[k] += __shfl_xor(nChildren[k], 1<<i, WARP_SIZE);
   }
 
@@ -544,9 +536,8 @@ static __global__ void buildOctant(
     if (nPtclChild[warpId][laneId] > 0)
       atomicAdd(&octCounter[8+16+warpId*8 + laneId], nPtclChild[warpId][laneId]);
 
-
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
-  
+
   /* detect last thread block for unique y-coordinate of the grid:
    * mind, this cannot be done on the host, because we don't detect last 
    * block on the grid, but instead the last x-block for each of the y-coordainte of the grid
