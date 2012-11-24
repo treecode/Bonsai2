@@ -218,8 +218,8 @@ static __global__ void buildOctantSingle(
 #pragma unroll
   for (int k = 0; k < 8; k++)  /* process particles in shared memory */
   {
-    const int locid = (k<<WARP_SIZE2) + laneId;
     if (nBeg + (k<<WARP_SIZE2) >= nEnd) break;
+    const int locid = (k<<WARP_SIZE2) + laneId;
     const int  addr = nBeg + locid;
     const bool mask = addr < nEnd;
 
@@ -441,6 +441,7 @@ static __global__ void buildOctant(
 #pragma unroll
     for (int k = 0; k < 8; k++)  /* process particles in shared memory */
     {
+      if (i + (k<<WARP_SIZE2) >= nEnd) break;
       const int locid = (k<<WARP_SIZE2) + laneId;
       const int  addr = i + locid;
       const bool mask = addr < nEnd;
