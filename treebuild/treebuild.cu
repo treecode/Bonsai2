@@ -227,15 +227,15 @@ static __global__ void buildOctantSingle(
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
     { 
-      if (box.centre.x - box.hsize > p.pos.x ||
-          box.centre.y - box.hsize > p.pos.y ||
-          box.centre.z - box.hsize > p.pos.z ||
-          box.centre.x + box.hsize < p.pos.x ||
-          box.centre.y + box.hsize < p.pos.y ||
-          box.centre.z + box.hsize < p.pos.z)
+      if (box.centre.x - box.hsize > p4.x ||
+          box.centre.y - box.hsize > p4.y ||
+          box.centre.z - box.hsize > p4.z ||
+          box.centre.x + box.hsize < p4.x ||
+          box.centre.y + box.hsize < p4.y ||
+          box.centre.z + box.hsize < p4.z)
       {
         printf("CELL, level= %d  pos= %g %g %g   c= %g %g %g  hsize= %g\n", level,
-            p.pos.x, p.pos.y,p.pos.z,
+            p4.x, p4.y,p4.z,
             box.centre.x, box.centre.y, box.centre.z, box.hsize);
         assert(0);
       }
@@ -452,20 +452,20 @@ static __global__ void buildOctant(
       const float4 p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
-      { 
-        if (box.centre.x - box.hsize > p.pos.x ||
-            box.centre.y - box.hsize > p.pos.y ||
-            box.centre.z - box.hsize > p.pos.z ||
-            box.centre.x + box.hsize < p.pos.x ||
-            box.centre.y + box.hsize < p.pos.y ||
-            box.centre.z + box.hsize < p.pos.z)
-        {
-          printf("CELL, level= %d  pos= %g %g %g   c= %g %g %g  hsize= %g\n", level,
-              p.pos.x, p.pos.y,p.pos.z,
-              box.centre.x, box.centre.y, box.centre.z, box.hsize);
-          assert(0);
-        }
+    { 
+      if (box.centre.x - box.hsize > p4.x ||
+          box.centre.y - box.hsize > p4.y ||
+          box.centre.z - box.hsize > p4.z ||
+          box.centre.x + box.hsize < p4.x ||
+          box.centre.y + box.hsize < p4.y ||
+          box.centre.z + box.hsize < p4.z)
+      {
+        printf("CELL, level= %d  pos= %g %g %g   c= %g %g %g  hsize= %g\n", level,
+            p4.x, p4.y,p4.z,
+            box.centre.x, box.centre.y, box.centre.z, box.hsize);
+        assert(0);
       }
+    }
 #endif
 
       /* use prefix sums to compute offset to where scatter particles */
