@@ -288,7 +288,8 @@ static __global__ void buildOctantSingle(
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
 
   int *shmem = &nPtclChild[0][0];
-  shmem[laneId] = 0;
+  if (warpId == 0)
+    shmem[laneId] = 0;
 
   __syncthreads();
 
@@ -306,7 +307,7 @@ static __global__ void buildOctantSingle(
   const int   nNode = isNode ? shmem[laneId] : 0;
 
   const int2 nSubNodes = warpBinExclusiveScan(isNode);
-  if (warpId)
+  if (warpId == 0)
     shmem[8+laneId] = nSubNodes.x;
   __syncthreads();
 
@@ -517,9 +518,10 @@ static __global__ void buildOctant(
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
 
   int *shmem = &nPtclChild[0][0];
-  shmem[laneId] = 0;
+  if (warpId == 0)
+    shmem[laneId] = 0;
 
-  __shared__ int lastBlock;
+  int &lastBlock = shmem[0];
   if (threadIdx.x == 0)
   {
     const int ticket = atomicAdd(&octCounter[8+8+8+64+octant2process], 1);
@@ -529,8 +531,15 @@ static __global__ void buildOctant(
 
   if (!lastBlock) return;
 
+  __syncthreads();
+  
+  if (warpId == 0)
+    shmem[laneId] = 0;
+
   if (threadIdx.x == 0)
     atomicCAS(&nlevels, level, level+1);
+
+  __syncthreads();
 
   const int nEnd1 = octCounter[8+8+warpId];
   const int nBeg1 = nEnd1 - nCell;
@@ -543,7 +552,7 @@ static __global__ void buildOctant(
   const int   nNode = isNode ? shmem[laneId] : 0;
 
   const int2 nSubNodes = warpBinExclusiveScan(isNode);
-  if (warpId)
+  if (warpId == 0)
     shmem[8+laneId] = nSubNodes.x;
   __syncthreads();
 
