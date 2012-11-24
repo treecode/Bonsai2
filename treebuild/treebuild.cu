@@ -405,29 +405,43 @@ static __global__ void buildOctant(
     ParticleLight<T> *buff,
     const int level = 0)
 {
+  /* compute laneId & warpId for each of the threads:
+   *   the thread block contains only 8 warps
+   *   a warp is responsible for a single octant of the cell 
+   */   
   const int laneId = threadIdx.x & (WARP_SIZE-1);
   const int warpId = threadIdx.x >> WARP_SIZE2;
 
+  /* We launch a 2D grid:
+   *   the y-corrdinate carries info about which parent cell to process
+   *   the x-coordinate is just a standard approach for CUDA parallelism 
+   */
   const int octant2process = (octantMask >> (3*blockIdx.y)) & 0x7;
 
+  /* get the pointer to atomic data that for a given octant */
   int *octCounter = octCounterBase + blockIdx.y*(8+8+8+64+8);
 
+  /* read data about the current cell */
   const int data  = octCounter[laneId];
   const int nCell = __shfl(data, 8+warpId, WARP_SIZE);
   const int nBeg  = __shfl(data, 1, WARP_SIZE);
   const int nEnd  = __shfl(data, 2, WARP_SIZE);
-
-  /* each of the 8 warps are responsible for each of the octant */
+  /* if we are not at the root level, compute the geometric box
+   * of the cell */
   if (level > 0)
     box = ChildBox(box, octant2process);
+
+  /* compute children boxes of this cell */
   const Box<T> childBox = ChildBox(box, warpId);
 
-  /* counter in shmem for each of the octant */
+  /* countes number of particles in each octant of a child octant */
   int nChildren[8] = {0};
 
+  /* just pointer casting to allow vector load/stores, currently works only in single precision */
   const float4* ptcl4 = (float4*)ptcl;
   __out float4* buff4=  (float4*)buff;
 
+  /* share storage for partiles */
   __shared__ float4 dataX[8*WARP_SIZE];
 
   /* process particle array */
@@ -470,6 +484,7 @@ static __global__ void buildOctant(
       const int     use = mask && (Octant(box.centre, pos) == warpId);
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
+      /* if this warp/octant gets particles, then write them into memory */
       if (offset.y > 0)
       {
         const int addr0 = laneId == 0 ? atomicAdd(&octCounter[8+8+warpId], offset.y) : -1;
@@ -484,6 +499,7 @@ static __global__ void buildOctant(
           subOctant = Octant(childBox.centre, pos);
         }
 
+        /* compute number of particles in each octant of the child cell, needed for the next level */
 #pragma unroll
         for (int k = 0; k < 8; k++)
           nChildren[k] += warpBinReduce(subOctant == k);
@@ -492,7 +508,7 @@ static __global__ void buildOctant(
     __syncthreads(); 
   }
 
-  /* done processing particles, store counts atomically in gmem */
+  /* done processing particles, store number of particle in each octant of a child cell */
 
   int (*nPtclChild)[8] = (int (*)[8])dataX;
 
@@ -506,9 +522,14 @@ static __global__ void buildOctant(
     if (nPtclChild[warpId][laneId] > 0)
       atomicAdd(&octCounter[8+16+warpId*8 + laneId], nPtclChild[warpId][laneId]);
 
-  /* last block finished, analysis of the data and schedule new kernel for children */
 
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
+  
+  /* detect last thread block for unique y-coordinate of the grid:
+   * mind, this cannot be done on the host, because we don't detect last 
+   * block on the grid, but instead the last x-block for each of the y-coordainte of the grid
+   * this should increase the degree of parallelism
+   */
 
   int *shmem = &nPtclChild[0][0];
   if (warpId == 0)
@@ -517,7 +538,7 @@ static __global__ void buildOctant(
   int &lastBlock = shmem[0];
   if (threadIdx.x == 0)
   {
-    const int ticket = atomicAdd(&octCounter[8+8+8+64+octant2process], 1);
+    const int ticket = atomicAdd(octCounter, 1);
     lastBlock = (ticket == gridDim.x-1);
   }
   __syncthreads();
@@ -525,6 +546,8 @@ static __global__ void buildOctant(
   if (!lastBlock) return;
 
   __syncthreads();
+
+  /* okay, we are in the last thread block, do the analysis and decide what to do next */
 
   if (warpId == 0)
     shmem[laneId] = 0;
@@ -534,6 +557,7 @@ static __global__ void buildOctant(
 
   __syncthreads();
 
+  /* compute beginning and then end addresses of the sorted particles  in the child cell */
   const int nEnd1 = octCounter[8+8+warpId];
   const int nBeg1 = nEnd1 - nCell;
 
@@ -544,6 +568,7 @@ static __global__ void buildOctant(
   const bool isNode = shmem[laneId] > NLEAF;
   const int   nNode = isNode ? shmem[laneId] : 0;
 
+  /* compute number of children that needs to be further split, and cmopute their offsets */
   const int2 nSubNodes = warpBinExclusiveScan(isNode);
   if (warpId == 0)
     shmem[8+laneId] = nSubNodes.x;
@@ -554,6 +579,7 @@ static __global__ void buildOctant(
   for (int i = 4; i >= 0; i--)
     nCellmax = max(nCellmax, __shfl_xor(nCellmax, 1<<i, WARP_SIZE));
 
+  /* if there is at least one cell to split, increment nuumber of the nodes */
   if (threadIdx.x == 0 && nSubNodes.y > 0)
   {
     shmem[8+8] = atomicAdd(&nnodes,nSubNodes.y);
@@ -563,9 +589,11 @@ static __global__ void buildOctant(
   }
   __syncthreads();
 
+  /* compute atomic data offset for cell that need to be split */
   const int next_node = shmem[8+8];
   int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
 
+  /* if cell needs to be split, populate it shared atomic data */
   if (nCell > NLEAF)
   {
     int *octCounterN = octCounterNbase + shmem[8+warpId]*(8+8+8+64+8);
@@ -599,8 +627,11 @@ static __global__ void buildOctant(
   /*  launch  child  kernel  */
   /***************************/
 
+  /* warps coorperate so that only 1 kernel needs to be launched by a thread block
+   * with larger degree of paralellism */
   if (nSubNodes.y > 0 && warpId == 0)
   {
+    /* build octant mask */
     int octant_mask = nNode > NLEAF ?  (laneId << (3*nSubNodes.x)) : 0;
 #pragma unroll
     for (int i = 4; i >= 0; i--)
@@ -613,7 +644,7 @@ static __global__ void buildOctant(
       cudaStream_t stream;
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
-      grid.y = nSubNodes.y;
+      grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
       if (nCellmax <= block.x)
       {
         grid.x = 1;
