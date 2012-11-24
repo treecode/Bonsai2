@@ -497,12 +497,26 @@ static __global__ void buildOctant(
         {
           buff4[addrB+offset.x] = p4;         /* float4 vector stores   */
           subOctant = Octant(childBox.centre, pos);
+
+          switch(subOctant)
+          {
+            case 0: nChildren[0]++; break;
+            case 1: nChildren[1]++; break;
+            case 2: nChildren[2]++; break;
+            case 3: nChildren[3]++; break;
+            case 4: nChildren[4]++; break;
+            case 5: nChildren[5]++; break;
+            case 6: nChildren[6]++; break;
+            case 7: nChildren[7]++; break;
+          };
         }
 
+#if 0
         /* compute number of particles in each octant of the child cell, needed for the next level */
 #pragma unroll
         for (int k = 0; k < 8; k++)
           nChildren[k] += warpBinReduce(subOctant == k);
+#endif
       }
     }
     __syncthreads(); 
@@ -511,6 +525,14 @@ static __global__ void buildOctant(
   /* done processing particles, store number of particle in each octant of a child cell */
 
   int (*nPtclChild)[8] = (int (*)[8])dataX;
+
+#pragma unroll
+  for (int k = 0; k < 8; k++)
+  {
+#pragma unroll
+    for (int i = 4; i >= 0; i--)
+      nChildren[k] += __shfl_xor(nChildren[k], 1<<i, WARP_SIZE);
+  }
 
   if (laneId == 0)
   {
