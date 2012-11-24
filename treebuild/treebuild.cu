@@ -93,7 +93,7 @@ struct __align__(4) ParticleLight
     idFlt = myshfl(idFlt, p.idFlt, i);
   }
 
-#if 1
+#if 0
   __device__ ParticleLight(const float4 v) :
     pos(v.x, v.y, v.z), idFlt(v.w) {}
   __device__ operator float4() const {return make_float4(pos.x, pos.y, pos.z, idFlt);}
@@ -172,7 +172,7 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
   return __popc(b);
 }
 
-template<int NLEAF, typename T>
+template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctantSingle(
     Box<T> box,
     const int nOctants,
@@ -206,10 +206,10 @@ static __global__ void buildOctantSingle(
 
   assert(blockIdx.x == 0);
   
-  const float4* ptcl4 = (float4*)ptcl;
-  __out float4* buff4=  (float4*)buff;
+  T4* ptcl4 = (T4*)ptcl;
+  T4* buff4=  (T4*)buff;
 
-  __shared__ float4 dataX[8*WARP_SIZE];
+  __shared__ T4 dataX[8*WARP_SIZE];
 
   /* process particle array */
   dataX[threadIdx.x] = ptcl4[min(nBeg + threadIdx.x, nEnd-1)];
@@ -223,7 +223,7 @@ static __global__ void buildOctantSingle(
     const int  addr = nBeg + locid;
     const bool mask = addr < nEnd;
 
-    const float4 p4 = dataX[locid];
+    const T4 p4 = dataX[locid];
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
     { 
@@ -370,7 +370,7 @@ static __global__ void buildOctantSingle(
 
       grid.x = 1;
       grid.y = nSubNodes.y;
-      buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+      buildOctantSingle<NLEAF,T,T4><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
     }
   }
 
@@ -389,13 +389,13 @@ static __global__ void buildOctantSingle(
     if (!(level&1))
       for (int i = nBeg1+laneId; i < nEnd1; i += WARP_SIZE)
         if (i < nEnd1)
-          ((float4*)ptcl)[i] = ((float4*)buff)[i];
+          ptcl4[i] = buff4[i];
   }
 }
 
 /****** this is the main functions that build the tree recursively *******/
 
-template<int NLEAF, typename T>
+template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctant(
     Box<T> box,
     const int nOctants,
@@ -438,11 +438,11 @@ static __global__ void buildOctant(
   int nChildren[8] = {0};
 
   /* just pointer casting to allow vector load/stores, currently works only in single precision */
-  const float4* ptcl4 = (float4*)ptcl;
-  __out float4* buff4=  (float4*)buff;
+  T4* ptcl4 = (T4*)ptcl;
+  T4* buff4=  (T4*)buff;
 
   /* share storage for partiles */
-  __shared__ float4 dataX[8*WARP_SIZE];
+  __shared__ T4 dataX[8*WARP_SIZE];
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
@@ -460,7 +460,7 @@ static __global__ void buildOctant(
       const int  addr = i + locid;
       const bool mask = addr < nEnd;
 
-      const float4 p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
+      const T4 p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -661,11 +661,11 @@ static __global__ void buildOctant(
       if (nCellmax <= block.x)
       {
         grid.x = 1;
-        buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+        buildOctantSingle<NLEAF,T,T4><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
       else
       {
-        buildOctant<NLEAF,T><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+        buildOctant<NLEAF,T,T4><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
     }
   }
@@ -685,7 +685,7 @@ static __global__ void buildOctant(
     if (!(level&1))
       for (int i = nBeg1+laneId; i < nEnd1; i += WARP_SIZE)
         if (i < nEnd1)
-          ((float4*)ptcl)[i] = ((float4*)buff)[i];
+          ptcl4[i] = buff4[i];
   }
 }
 
@@ -909,7 +909,7 @@ static __global__ void countAtRootNode(
 #endif
 }
 
-template<int NLEAF, typename T>
+template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctree(
     const int n,
     int* memory_pool,
@@ -981,7 +981,7 @@ static __global__ void buildOctree(
   computeGridAndBlockSize(grid, block, n);
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-  buildOctant<NLEAF,T><<<grid, block,0,stream>>>(box_ptr[0], 1, 0, octCounterN, ptcl, buff);
+  buildOctant<NLEAF,T,T4><<<grid, block,0,stream>>>(box_ptr[0], 1, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
   //  delete [] octCounterN;
 
@@ -1000,7 +1000,13 @@ static __global__ void buildOctree(
 }
 
 /* current only works with single precision */
+#if 1
 typedef float real;
+typedef float4 real4;
+#else
+typedef double real;
+typedef double4 real4;
+#endif
 
 int main(int argc, char * argv [])
 {
@@ -1073,19 +1079,19 @@ int main(int argc, char * argv [])
 #endif
 
 #if 0
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferL1));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferL1));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real,real4>, cudaFuncCachePreferL1));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real,real4>, cudaFuncCachePreferL1));
 #elif 1
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real,real4>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real,real4>, cudaFuncCachePreferShared));
 #else
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferEqual));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferEqual));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real,real4>, cudaFuncCachePreferEqual));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real,real4>, cudaFuncCachePreferEqual));
 #endif
 
   {
     const double t0 = rtc();
-    buildOctree<NLEAF, real><<<1,1>>>(n, memory_pool, d_ptcl1, d_ptcl2);
+    buildOctree<NLEAF, real, real4><<<1,1>>>(n, memory_pool, d_ptcl1, d_ptcl2);
     const int ret = (cudaDeviceSynchronize() != cudaSuccess);
     if (ret)
     {
@@ -1104,7 +1110,7 @@ int main(int argc, char * argv [])
 
   {
     const double t0 = rtc();
-    buildOctree<NLEAF, real><<<1,1>>>(n, memory_pool, d_ptcl1, d_ptcl2);
+    buildOctree<NLEAF, real, real4><<<1,1>>>(n, memory_pool, d_ptcl1, d_ptcl2);
     const int ret = (cudaDeviceSynchronize() != cudaSuccess);
     if (ret)
       fprintf(stderr, "CNP tree launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
