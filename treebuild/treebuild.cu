@@ -446,9 +446,11 @@ static __global__ void buildOctant(
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
+  if (threadIdx.x == 0 && blockIdx.x == 0)
+    atomicAdd(&io_words, (nEnd-nBeg)*4*sizeof(T4)/sizeof(float4));
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
-    int nio_per_warp = WARP_SIZE*4*sizeof(T)/sizeof(float);
+    int nio_per_warp = 0;
     dataX[threadIdx.x] = ptcl4[min(i + threadIdx.x, nEnd-1)];
     __syncthreads(); 
 #pragma unroll
