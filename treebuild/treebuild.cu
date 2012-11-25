@@ -448,8 +448,7 @@ static __global__ void buildOctant(
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
-    if (threadIdx.x == 0)
-      atomicAdd(&io_words, 8*WARP_SIZE*4*sizeof(T)/sizeof(float));
+    int nio_per_warp = WARP_SIZE*4*sizeof(T)/sizeof(float);
     dataX[threadIdx.x] = ptcl4[min(i + threadIdx.x, nEnd-1)];
     __syncthreads(); 
 #pragma unroll
@@ -489,8 +488,7 @@ static __global__ void buildOctant(
       {
         const int addr0 = laneId == 0 ? atomicAdd(&octCounter[8+8+warpId], offset.y) : -1;
         const int addrB = __shfl(addr0, 0, WARP_SIZE);
-        if (laneId == 0)
-          atomicAdd(&io_words, offset.y*4*sizeof(T)/sizeof(float));
+        nio_per_warp += offset.y*4*sizeof(T)/sizeof(float);
 
         if (use)
         {
@@ -511,8 +509,11 @@ static __global__ void buildOctant(
         }
       }
     }
+    if (laneId == 0)
+      atomicAdd(&io_words, nio_per_warp);
     __syncthreads(); 
   }
+
 
   /* done processing particles, store number of particle in each octant of a child cell */
 
