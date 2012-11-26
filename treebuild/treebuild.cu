@@ -171,7 +171,7 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
   const unsigned int b = __ballot(p);
   return __popc(b);
 }
-
+  
 template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctantSingle(
     Box<T> box,
@@ -446,11 +446,13 @@ static __global__ void buildOctant(
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
+#ifdef IOCOUNT
   if (threadIdx.x == 0 && blockIdx.x == 0)
     atomicAdd(&io_words, (nEnd-nBeg)*4*sizeof(T4)/sizeof(float4));
+#endif
+  int nio_per_warp = 0;
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
-    int nio_per_warp = 0;
     dataX[threadIdx.x] = ptcl4[min(i + threadIdx.x, nEnd-1)];
     __syncthreads(); 
 #pragma unroll
@@ -511,15 +513,23 @@ static __global__ void buildOctant(
         }
       }
     }
-    if (laneId == 0)
-      atomicAdd(&io_words, nio_per_warp);
     __syncthreads(); 
   }
-
 
   /* done processing particles, store number of particle in each octant of a child cell */
 
   int (*nPtclChild)[8] = (int (*)[8])dataX;
+
+#ifdef IOCOUNT
+  nPtclChild[0][warpId] = nio_per_warp;
+  __syncthreads();
+  nio_per_warp = laneId < 8 ? nPtclChild[0][laneId] : 0;
+#pragma unroll
+  for (int i = 2; i >= 0; i--)
+    nio_per_warp += __shfl_xor(nio_per_warp, 1<<i, WARP_SIZE);
+  if (threadIdx.x == 0)
+    atomicAdd(&io_words, nio_per_warp);
+#endif
 
 #pragma unroll
   for (int i = 4; i >= 0; i--)
@@ -994,8 +1004,9 @@ static __global__ void buildOctree(
   printf(" nleaves= %d\n", nleaves);
   printf(" nlevels= %d\n", nlevels);
 
+#ifdef IOCOUNT
   printf(" io= %g MB \n" ,io_words*4.0/1024.0/1024.0);
-
+#endif
 
   delete [] octCounter;
   delete [] minmax_ptr;
