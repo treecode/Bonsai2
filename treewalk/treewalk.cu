@@ -1,3 +1,19 @@
+static __device__ __forceinline__
+Force evaluateDirect_warp(Force f, const int jptclIdx, const Particle iPtcl, const Particle *ptclList)
+{
+#if 1 
+  const Particle jPtcl = ptclList[jptclIdx];
+  const real eps2 = _eps2_const;
+#pragma unroll
+  for (int i = 0; i < WARP_SIZE; i++)
+  {
+    const Particle jp = jPtcl.shfl(i);
+    force = addMonpole(force, ipos, jpos, eps2);
+  }
+  return force;
+#endif
+}
+
 static __device__ __forceinline__ 
 float4 addMonopole(
     float4 acc
@@ -5,35 +21,51 @@ float4 addMonopole(
     const float4 jpos,
     const float  eps2)
 {
-#if 1 
-  const float3 dr = make_float3(jpos.x - ipos.x, jpos.y - ipos.y, jpos.z - ipos.z);
+  const float3 dr = make_float3(jpos.x - ipos.x, jpos.y - ipos.y, jpos.z - ipos.z);  // 3
 
-  const float r2     = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z + eps2;
-  const float rinv   = rsqrtf(r2);
-  const float rinv2  = rinv*rinv;
+  const float r2     = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z + eps2;  // 6
+  const float rinv   = rsqrtf(r2);    // 2
+  const float rinv2  = rinv*rinv;     // 1
   const float jmass  = jpos.w;
-  const float mrinv  = jmass * rinv;
-  const float mrinv3 = mrinv * rinv2;
+  const float mrinv  = jmass * rinv;  // 1
+  const float mrinv3 = mrinv * rinv2; // 1
 
-  acc.w -= mrinv;
-  acc.x += mrinv3 * dr.x;
-  acc.y += mrinv3 * dr.y;
-  acc.z += mrinv3 * dr.z;
-#endif
+  acc.w -= mrinv;                     // 1
+  acc.x += mrinv3 * dr.x;             // 2
+  acc.y += mrinv3 * dr.y;             // 2
+  acc.z += mrinv3 * dr.z;             // 2
+
+  // total 21 flops
 
   return acc;
+}
+
+  static __device__ __forceinline__
+Force evaluateApprox_warp(Force f, const int jcellIdx, Particle iPtcl, const float4 *nodeMM, const float4 *nodeQM)
+{
+#if 1
+  const float4 jcellMM = nodeMM[jcellIdx];
+  const float4 jcellQM = nodeQM[jcellIdx];
+  const real eps2  = _eps2_const;
+#pragma unroll
+  for (int i = 0; i < WARP_SIZE; i++)
+  {
+    const float4 jcMM = shfl_float4(jcMM, i);
+    const float4 jcQM = shfl_float4(jcQM, i);
+    force = addQuadrupole(force, ipos, jcMM, jcQM, eps2);
+  }
+  return force;
+#endif
 }
 
 static __device__ __forceinline__ 
 float4 addQuadrupole(
     float4 acc, 
     const float4 pos,
-    const float4 mass,
     const float4 Q0, 
     const float4 Q1, 
     const float eps2) 
 {
-#if 1
   const float3 dr = make_float3(pos.x - com.x, pos.y - com.y, pos.z - com.z);
   const float  r2 = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z + eps2;
 
@@ -68,7 +100,7 @@ float4 addQuadrupole(
   acc.x  += C*dr.x + D2*qR.x;
   acc.y  += C*dr.y + D2*qR.y;
   acc.z  += C*dr.z + D2*qR.z;               // 23
-#endif  // total: 16 + 3 + 22 + 23 = 64 flops 
+  // total: 16 + 3 + 22 + 23 = 64 flops 
 
   return acc;
 }
@@ -126,7 +158,7 @@ static __device__ __forceinline__ int inclusive_segscan_warp_step(int value, con
   return value;
 }
 
-static __device__ __forceinline__ int2 inclusive_segscan_warp(
+static __device__ __forceinline__ int2 exclusive_segscan_warp(
     const int packed_value, int &dist_block, int &nseg)
 {
   const int  flag = packed_value < 0;
@@ -140,14 +172,14 @@ static __device__ __forceinline__ int2 inclusive_segscan_warp(
 
   const int distance = __clz(flags & lanemask_le()) + laneId - 31;
   const int val = inclusive_segscan_warp_step<WARP_SIZE2>(value, min(distance, laneId));
-  return make_int2(val, __shfl(val, WARP_SIZE-1, WARP_SIZE));
+  return make_int2(val-value, __shfl(val, WARP_SIZE-1, WARP_SIZE));
 }
 
-static __device__ __forceinline__ int inclusive_segscan_array(int *data, const int n)
+static __device__ __forceinline__ int exclusive_segscan_array(int *data, const int n)
 {
   const int laneId = threadIdx.x & (WARP_SIZE-1);
   int dist, nseg = 0;
-  const int2 scanVal = inclusive_segscan_warp(data[laneId], dist, nseg);
+  const int2 scanVal = exclusive_segscan_warp(data[laneId], dist, nseg);
   data[laneId] = scanVal.x;
   if (n <= WARP_SIZE) return nseg;
 
@@ -155,7 +187,7 @@ static __device__ __forceinline__ int inclusive_segscan_array(int *data, const i
 
   for (int p = WARP_SIZE; p < n; p += WARP_SIZE)
   {
-    const int2 scanVal = inclusive_segscan_warp(data[p+laneId], dist, nseg);
+    const int2 scanVal = exclusive_segscan_warp(data[p+laneId], dist, nseg);
     data[p+laneId] = scanVal.x + (offset & (-(laneId < dist)));
     offset = scanVal.y;
   }
@@ -170,7 +202,7 @@ void walkLevel(..)
 {
   const int laneIdx = threadIdx.x & (WARP_SIZE-1);
   const int warpIdx = threadIdx.x >> WARP_SIZE2;
-  
+
   for (int i = 0; i < nCells; i += WARP_SIZE)
   {
     const bool useCell = i < nCells;
@@ -179,71 +211,86 @@ void walkLevel(..)
     const float4   cellCOM  = in_cellCOM [    cellIdx];
     const NodeData cellData = in_cellData[    cellIdx];   /* vector int4 load */
 
-    const int firstChild = cellData.firstChild();
-    const int  nChildren = cellData. nChildren();
+    const int firstChild = cellData.firstChild();  /* can also be first particle, if it is a leaf */
+    const int  nChildren = cellData. nChildren();  /* can be more than 8,         if it is a leaf */
 
     const bool toSplit = splitCell(cellCOM, groupCentre, groupSize);
-    const bool isNode  = cellCOM.w < 0.0f;
+    const bool isNode  = cellData.isNode();
 
     /* expand children nodes into stack */
 
-    const int2 childOffset = warpIntExclusiveScan(nChildren & (-(useCell && isNode && toSplit)));
-    nextLevelNodes[nextLevelCounter + childOffset.x] = firstChild;
-
-    inclusive_segscan_array(nextLevelNodes+nextLevelCounter, childOffset.y);
-    nextLevelCounter += childOffset.y;
-
-    /* if stack is complete, lunch kernel for the next level */
-
-    if (nextLevelCounter >= NEXT_LEVEL_THRESHOLD);
     {
-      nextLevelCounter -= NEXT_LEVEL_THRESHOLD;
-#pragma unroll
-      for (int i = 0;  i < NEXT_LEVEL_THRESHOLD; i += WARP_SIZE)
-        gmem_nextLevelNodes[i + laneId] = nextLevelNodes[nextLevelCounter + i + laneId];
+      const int isSplit = isNode && toSplit && useCell;
+      const int2 childOffset = warpIntExclusiveScan(nChildren & (-isSplit));
+      for (int i = 0 ; i < childOffset.y; i += WARP_SIZE)
+        if (i + laneId < childOffset.y)
+          nextLevelNodes[nextLevelCounter + childOffset.x] = 1;
+      if (isSplit)
+        nextLevelNodes[nextLevelCounter + childOffset.x] = -1-firstChild;  /* negative numbers mean beginning of the segment */
 
-      walkLevel<<<NEXT_LEVEL_THRESHOLD/NTHREADS,NTHREADS>>>(gmem_nextLevelNodes, NEXT_LEVEL_THRESHOLD);
+      exclusive_segscan_array(nextLevelNodes+nextLevelCounter, childOffset.y);
+      nextLevelCounter += childOffset.y;
+
+      /* if stack is complete, lunch kernel for the next level */
+
+      if (nextLevelCounter >= NEXT_LEVEL_THRESHOLD);
+      {
+        nextLevelCounter -= NEXT_LEVEL_THRESHOLD;
+#pragma unroll
+        for (int i = 0;  i < NEXT_LEVEL_THRESHOLD; i += WARP_SIZE)
+          gNextLevelNodes[i + laneId] = nextLevelNodes[nextLevelCounter + i + laneId];
+
+        /* schedule next level walk */
+        walkLevel<<<NEXT_LEVEL_THRESHOLD/NTHREADS,NTHREADS>>>(gNextLevelNodes, NEXT_LEVEL_THRESHOLD);
+      }
     }
 
-    /* store approximate interactions */
+    /* store & evaluate approximate interactions */
 
-    const bool     isApprox = !toSplit && useCell;
-    const int2 approxOffset = warpBinExclusiveScan(isApprox);
-    if (isApprox)
-      approxCellList[approxCellCounter + approxOffset.x] = cellIdx;
-    approxCellCounter += approxOffset.y;
-
-    if (approxCellCounter >= APPROX_THRESHOLD)
     {
-      approxCellCounter -= APPROX_THRESHOLD;
-#pragma unroll
-      for (int i = 0; i < APPROX_THRESHOLD; i += WARP_SIZE)
-        gmem_approxCellList[i + laneId] = approxCellList[approxCellCounter + i + laneId];
+      const bool     isApprox = !toSplit && useCell;
+      const int2 approxOffset = warpBinExclusiveScan(isApprox);
 
-      approxEvaluate<<<APPROX_THRESHOLD/NTHREADS,NTHREADS>>>(gmem_approxCellList, APPROX_THRESHOLD);
+      /* store cell's index in shared memory to evaluate later */
+      if (isApprox && approxCounter + approxOffset.x < WARP_SIZE)
+        approxList[approxCounter + approxOffset.x] = cellIdx;
+
+      if (approxCounter + approxOffset.y >= WARP_SIZE)
+      {
+        /* evaluation part, since it is warp-synchronious programming, no shmem is used */
+        iForce = evaluateApprox_warp(iForce, approxList[laneId], iPtcl, nodeMM, nodeQM);
+        approxCounter -= WARP_SIZE;
+        if (isApprox && approxCounter + approxOffset.x >= 0)
+          approxList[approxCounter + approxOffset.x] = cellIdx;
+      }
     }
 
-    /* store direct interactions */
+    /* store & evaluate direct interactions */
 
-    const bool       isLeaf = !isNode;
-    const bool     isDirect = toSplit && isLeaf;
-    const int2 directOffset = warpBinExclusiveScan(isDirect);
-    if (isDirect)
-      directLeafList[directLeafCounter + directOffset.x] = cellIdx;
-    directLeafCounter += directOffset.y;
-    
-    if (directLeafCounter >= DIRECT_LEAF_THRESHOLD)
     {
-      directLeafCounter -= DIRECT_LEAF_THRESHOLD;
-#pragma unroll
-      for (int i = 0; i < DIRECT_LEAF_THRESHOLD; i += WARP_SIZE)
-        gmem_directLeafList[i + laneId] = directLeafList[directLeafCounter + i + laneId];
+      const bool       isLeaf = !isNode;
+      const bool     isDirect = toSplit && isLeaf && useCell;
+      const int2 childOffset  = warpIntExclusiveScan(nChildren & (-isDirect));
+      const int     nptcl = childOffset.y;
+      const int    offset = childOffset.x;
+      const int firstPtcl = firstChild;
+      for (int i = 0; i < nptcl; i += WARP_SIZE)
+        if (i + laneId < nptcl)
+          directList[i + laneId] = 1;
+      if (isDirect)
+        directList[directCounter + offset] = -1-firstPtcl;
 
-      directEvaluate<<<DIRECT_LEAF_THRESHOLD/NTHREADS,NTHREADS>>>(gmem_directLeafList, DIRECT_LEAF_THRESHOLD);
+      exclusive_segscan_array(directList + directCounter, nptcl);
+      directCounter += nptcl;
+
+      while (directCounter >= WARP_SIZE)
+      {
+        directCounter -= WARP_SIZE;
+        iForce = evaluateDirect_warp(iForce, directList[directCounter + laneId], iPtcl, ptclList);
+      }
     }
 
   }
-
 
 }
 
