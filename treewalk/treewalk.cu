@@ -268,9 +268,10 @@ void walkLevel(..)
     /* store & evaluate direct interactions */
 
     {
-      const bool       isLeaf = !isNode;
-      const bool     isDirect = toSplit && isLeaf && useCell;
-      const int2 childOffset  = warpIntExclusiveScan(nChildren & (-isDirect));
+      const bool      isLeaf = !isNode;
+      const bool    isDirect = toSplit && isLeaf && useCell;
+      const int2 childOffset = warpIntExclusiveScan(nChildren & (-isDirect));
+
       const int     nptcl = childOffset.y;
       const int    offset = childOffset.x;
       const int firstPtcl = firstChild;

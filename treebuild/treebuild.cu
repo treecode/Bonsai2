@@ -15,10 +15,12 @@ __device__ unsigned int nnodes = 0;
 __device__ unsigned int nleaves = 0;
 __device__ unsigned int nlevels = 0;
 __device__ unsigned int nbodies_leaf = 0;
+__device__ unsigned int ncells = 0;
 
 
 __device__   int *memPool;
 __constant__ int d_node_max;
+__constant__ int d_cell_max;
 __device__ unsigned long long io_words;
 
 template<typename T>
@@ -171,11 +173,37 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
   const unsigned int b = __ballot(p);
   return __popc(b);
 }
+
+struct CellData
+{
+  private:
+  enum {NPACK_SHIFT = 27};
+  enum {NPACK_MASK = (0x1FU << NPACK_SHIFT)};
+  unsigned int parentCell;
+  unsigned int packed_first_n;
+  public:
+  __device__ CellData(
+      const unsigned int _first, 
+      const unsigned int _n,
+      const unsigned int _parentCell = 0xFFFFFFFF) : parentCell(_parentCell)
+  {
+    packed_first_n = _first | ((unsigned int)_n << NPACK_SHIFT);
+  }
+
+  __device__ int n()     const {return packed_first_n >> NPACK_SHIFT;}
+  __device__ int first() const {return packed_first_n  & NPACK_MASK;}
+  __device__ int parent() const { return parentCell;}
+
+  __device__ bool isLeaf() const {return packed_first_n == 0xFFFFFFFF;}
+  __device__ bool isNode() const {return !isLeaf();}
+};
   
 template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctantSingle(
     Box<T> box,
-    const int nOctants,
+    const int cellParentIndex,
+    const int cellIndexBase,
+    CellData *cellDataList,
     const int octantMask,
     __out int *octCounterBase,
     ParticleLight<T> *ptcl,
@@ -321,12 +349,30 @@ static __global__ void buildOctantSingle(
   }
   __syncthreads();
 
-  const int next_node = shmem[8+8];
-  int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
+  const int next_node   = shmem[8+8];
+  int *octCounterNbase  = &memPool[next_node*(8+8+8+64+8)];
+  
+  __syncthreads();
+
+  /* writing linking info, parent, child and particle's list */
+  const int nChildrenCell = warpBinReduce(laneId < 8 ? shmem[laneId] > 0 : false);
+  if (threadIdx.x == 0 && nChildrenCell > 0)
+  {
+    const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
+#if 1
+    assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
+#endif
+    const CellData cellData(cellFirstChildIndex, nChildrenCell, cellParentIndex);
+    cellDataList[cellIndexBase + blockIdx.y] = cellData;
+    shmem[8+8] = cellFirstChildIndex;
+  }
+  
+  __syncthreads();
+  const int cellFirstChildIndex = shmem[8+8];
 
   if (nCell > NLEAF)
   {
-    int *octCounterN = octCounterNbase + shmem[8+warpId]*(8+8+8+64+8);
+    int  *octCounterN = octCounterNbase + shmem[8+warpId]*(8+8+8+64+8);
 
     /* compute offsets */
     int cellOffset = nSubCell;
@@ -370,7 +416,9 @@ static __global__ void buildOctantSingle(
 
       grid.x = 1;
       grid.y = nSubNodes.y;
-      buildOctantSingle<NLEAF,T,T4><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+      buildOctantSingle<NLEAF,T,T4><<<grid,block,0,stream>>>
+        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+         octant_mask, octCounterNbase, buff, ptcl, level+1);
     }
   }
 
@@ -385,6 +433,8 @@ static __global__ void buildOctantSingle(
       assert(nEnd1 - nBeg1 <= NLEAF);
       atomicAdd(&nleaves,1);
       atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
+      const CellData leafData(nBeg, nEnd1 - nBeg1);
+      cellDataList[cellFirstChildIndex + gridDim.y + shmem[warpId]] = leafData;
     }
     if (!(level&1))
       for (int i = nBeg1+laneId; i < nEnd1; i += WARP_SIZE)
@@ -398,7 +448,9 @@ static __global__ void buildOctantSingle(
 template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctant(
     Box<T> box,
-    const int nOctants,
+    const int cellParentIndex,
+    const int cellIndexBase,
+    CellData *cellDataList,
     const int octantMask,
     __out int *octCounterBase,
     ParticleLight<T> *ptcl,
@@ -619,6 +671,24 @@ static __global__ void buildOctant(
   const int next_node = shmem[8+8];
   int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
 
+  __syncthreads();
+
+  /* writing linking info, parent, child and particle's list */
+  const int nChildrenCell = warpBinReduce(laneId < 8 ? shmem[laneId] > 0 : false);
+  if (threadIdx.x == 0 && nChildrenCell > 0)
+  {
+    const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
+#if 1
+    assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
+#endif
+    const CellData cellData(cellFirstChildIndex, nChildrenCell, cellParentIndex);
+    cellDataList[cellIndexBase + blockIdx.y] = cellData;
+    shmem[8+8] = cellFirstChildIndex;
+  }
+
+  __syncthreads();
+  const int cellFirstChildIndex = shmem[8+8];
+
   /* if cell needs to be split, populate it shared atomic data */
   if (nCell > NLEAF)
   {
@@ -674,11 +744,15 @@ static __global__ void buildOctant(
       if (nCellmax <= block.x)
       {
         grid.x = 1;
-        buildOctantSingle<NLEAF,T,T4><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+        buildOctantSingle<NLEAF,T,T4><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
       else
       {
-        buildOctant<NLEAF,T,T4><<<grid,block,0,stream>>>(box, nSubNodes.y, octant_mask, octCounterNbase, buff, ptcl, level+1);
+        buildOctant<NLEAF,T,T4><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
     }
   }
@@ -686,6 +760,12 @@ static __global__ void buildOctant(
   /******************/
   /* process leaves */
   /******************/
+  __syncthreads();
+
+  const int2 nLeaves = warpBinExclusiveScan(shmem[laneId] > 0 && shmem[laneId] <= NLEAF);
+  if (warpId == 0)
+    shmem[8+laneId] = nLeaves.x;
+  __syncthreads();
 
   if (nCell <= NLEAF && nCell > 0)
   {
@@ -694,6 +774,8 @@ static __global__ void buildOctant(
       assert(nEnd1 - nBeg1 <= NLEAF);
       atomicAdd(&nleaves,1);
       atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
+      const CellData leafData(nBeg, nEnd1 - nBeg1);
+      cellDataList[cellFirstChildIndex + gridDim.y + shmem[warpId]] = leafData;
     }
     if (!(level&1))
       for (int i = nBeg1+laneId; i < nEnd1; i += WARP_SIZE)
@@ -701,6 +783,15 @@ static __global__ void buildOctant(
           ptcl4[i] = buff4[i];
   }
 }
+
+/******* compute multipole moments ****/
+
+template<typename T>
+static __global__ 
+void computeMultipoleMoments()
+{
+}
+
 
 /****** not very tuned kernels to do preparatory stuff ********/
 
@@ -925,12 +1016,14 @@ static __global__ void countAtRootNode(
 template<int NLEAF, typename T, typename T4>
 static __global__ void buildOctree(
     const int n,
+    CellData *cellDataList,
     int* memory_pool,
     __out ParticleLight<T> *ptcl,
     __out ParticleLight<T> *buff)
 {
   memPool = memory_pool;
   printf("d_node_max= %d\n", d_node_max);
+  printf("d_cell_max= %d\n", d_cell_max);
   const int NTHREADS = 256;
   const int NBLOCKS  = 256;
   Box<T> *box_ptr = new Box<T>();
@@ -983,6 +1076,7 @@ static __global__ void buildOctree(
   nnodes = 0;
   nleaves = 0;
   nlevels = 0;
+  ncells  = 0;
   nbodies_leaf = 0;
 
   octCounterN[1] = 0;
@@ -994,7 +1088,8 @@ static __global__ void buildOctree(
   computeGridAndBlockSize(grid, block, n);
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-  buildOctant<NLEAF,T,T4><<<grid, block,0,stream>>>(box_ptr[0], 1, 0, octCounterN, ptcl, buff);
+  buildOctant<NLEAF,T,T4><<<grid, block,0,stream>>>
+    (box_ptr[0], 0, 0, cellDataList, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
   //  delete [] octCounterN;
 
@@ -1002,6 +1097,7 @@ static __global__ void buildOctree(
   printf(" nb_leaf= %d\n", nbodies_leaf);
   printf(" nnodes = %d\n", nnodes);
   printf(" nleaves= %d\n", nleaves);
+  printf(" ncells=  %d\n",  ncells);
   printf(" nlevels= %d\n", nlevels);
 
 #ifdef IOCOUNT
@@ -1075,6 +1171,7 @@ int main(int argc, char * argv [])
 
 
   int node_max = n/10;
+  int cell_max = n;
 
   cuda_mem<int> memory_pool;
   const unsigned long long nstack = (8+8+8+64+8)*node_max;
@@ -1084,6 +1181,11 @@ int main(int argc, char * argv [])
   CUDA_SAFE_CALL(cudaMemset(memory_pool,0,nstack*sizeof(int)));
 
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_node_max, &node_max, sizeof(int), 0, cudaMemcpyHostToDevice));
+
+
+  cuda_mem<CellData> cellDataList;
+  cellDataList.alloc(cell_max);
+  CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
 
 
 #ifndef NPERLEAF
@@ -1105,7 +1207,7 @@ int main(int argc, char * argv [])
 
   {
     const double t0 = rtc();
-    buildOctree<NLEAF, real, real4><<<1,1>>>(n, memory_pool, d_ptcl1, d_ptcl2);
+    buildOctree<NLEAF, real, real4><<<1,1>>>(n, cellDataList, memory_pool, d_ptcl1, d_ptcl2);
     const int ret = (cudaDeviceSynchronize() != cudaSuccess);
     if (ret)
     {
@@ -1124,7 +1226,7 @@ int main(int argc, char * argv [])
 
   {
     const double t0 = rtc();
-    buildOctree<NLEAF, real, real4><<<1,1>>>(n, memory_pool, d_ptcl1, d_ptcl2);
+    buildOctree<NLEAF, real, real4><<<1,1>>>(n, cellDataList, memory_pool, d_ptcl1, d_ptcl2);
     const int ret = (cudaDeviceSynchronize() != cudaSuccess);
     if (ret)
       fprintf(stderr, "CNP tree launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
