@@ -361,6 +361,134 @@ static __global__ void buildOctantSingle(
     shmem[warpIdx] = nCell;
   __syncthreads();
 
+#if 1
+  const int npCell = laneIdx < 8 ? shmem[laneIdx] : 0;
+
+  /* compute number of children that needs to be further split, and cmopute their offsets */
+  const int2 nSubNodes = warpBinExclusiveScan(npCell > NLEAF);
+  const int2 nLeaves   = warpBinExclusiveScan(npCell > 0 && npCell <= NLEAF);
+  if (warpIdx == 0 && laneIdx < 8)
+  {
+    shmem[8 +laneIdx] = nSubNodes.x;
+    shmem[16+laneIdx] = nLeaves.x;
+  }
+
+  int nCellmax = npCell;
+#pragma unroll
+  for (int i = 2; i >= 0; i--)
+    nCellmax = max(nCellmax, __shfl_xor(nCellmax, 1<<i, WARP_SIZE));
+
+  /* if there is at least one cell to split, increment nuumber of the nodes */
+  if (threadIdx.x == 0 && nSubNodes.y > 0)
+  {
+    shmem[16+8] = atomicAdd(&nnodes,nSubNodes.y);
+#if 0   /* temp solution, a better one is to use RingBuffer */
+    assert(shmem[16+8] < d_node_max);
+#endif
+  }
+
+  /* writing linking info, parent, child and particle's list */
+  const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
+  if (threadIdx.x == 0 && nChildrenCell > 0)
+  {
+    const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
+    /*** keep in mind, the 0-level will be overwritten ***/
+    const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
+    cellDataList[cellIndexBase + blockIdx.y] = cellData;
+    shmem[16+9] = cellFirstChildIndex;
+  }
+
+  __syncthreads();
+  const int cellFirstChildIndex = shmem[16+9];
+  /* compute atomic data offset for cell that need to be split */
+  const int next_node = shmem[16+8];
+  int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
+
+  const int nodeOffset = shmem[8 +warpIdx];
+  const int leafOffset = shmem[16+warpIdx];
+
+  /* if cell needs to be split, populate it shared atomic data */
+  if (nCell > NLEAF)
+  {
+    int *octCounterN = octCounterNbase + nodeOffset*(8+8+8+64+8);
+
+    /* number of particles in each cell's subcells */
+//    const int nSubCell = laneIdx < 8 ? octCounter[8+16+warpIdx*8 + laneIdx] : 0;
+
+    /* compute offsets */
+    int cellOffset = nSubCell;
+#pragma unroll
+    for(int i = 0; i < 3; i++)  /* log2(8) steps */
+      cellOffset = shfl_scan_add_step(cellOffset, 1 << i);
+    cellOffset -= nSubCell;
+
+    /* store offset in memory */
+
+    cellOffset = __shfl_up(cellOffset, 8, WARP_SIZE);
+    if (laneIdx < 8) cellOffset = nSubCell;
+    else            cellOffset += nBeg1;
+    cellOffset = __shfl_up(cellOffset, 8, WARP_SIZE);
+
+    if (laneIdx <  8) cellOffset = 0;
+    if (laneIdx == 1) cellOffset = nBeg1;
+    if (laneIdx == 2) cellOffset = nEnd1;
+
+    if (laneIdx < 24)
+      octCounterN[laneIdx] = cellOffset;
+  }
+
+  /***************************/
+  /*  launch  child  kernel  */
+  /***************************/
+
+  /* warps coorperate so that only 1 kernel needs to be launched by a thread block
+   * with larger degree of paralellism */
+  if (nSubNodes.y > 0 && warpIdx == 0)
+  {
+    /* build octant mask */
+    int octant_mask = npCell > NLEAF ?  (laneIdx << (3*nSubNodes.x)) : 0;
+#pragma unroll
+    for (int i = 4; i >= 0; i--)
+      octant_mask |= __shfl_xor(octant_mask, 1<<i, WARP_SIZE);
+
+    if (threadIdx.x == 0)
+    {
+      dim3 grid, block;
+      computeGridAndBlockSize(grid, block, nCellmax);
+      cudaStream_t stream;
+      cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+
+      grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
+      grid.x = 1;
+      buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
+        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+         octant_mask, octCounterNbase, buff, ptcl, level+1);
+    }
+  }
+
+  /******************/
+  /* process leaves */
+  /******************/
+
+  if (nCell <= NLEAF && nCell > 0)
+  {
+    if (laneIdx == 0)
+    {
+      assert(nEnd1 - nBeg1 <= NLEAF);
+      atomicAdd(&nleaves,1);
+      atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
+      const CellData leafData(cellIndexBase+blockIdx.y, nBeg, nEnd1);
+      cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
+    }
+    if (!(level&1))
+      for (int i = nBeg1+laneIdx; i < nEnd1; i += WARP_SIZE)
+        if (i < nEnd1)
+          ptcl4[i] = buff4[i];
+  }
+#endif
+
+#if 0
+
   const bool isNode = shmem[laneIdx] > NLEAF;
   const int   nNode = isNode ? shmem[laneIdx] : 0;
 
@@ -476,6 +604,8 @@ static __global__ void buildOctantSingle(
         if (i < nEnd1)
           ptcl4[i] = buff4[i];
   }
+#endif
+
 }
 
 /****** this is the main functions that build the tree recursively *******/
@@ -679,30 +809,30 @@ static __global__ void buildOctant(
     shmem[warpIdx] = nCell;
   __syncthreads();
 
-  const bool isNode = shmem[laneIdx] > NLEAF;
-  const int   nNode = isNode ? shmem[laneIdx] : 0;
+  const int npCell = laneIdx < 8 ? shmem[laneIdx] : 0;
 
   /* compute number of children that needs to be further split, and cmopute their offsets */
-  const int2 nSubNodes = warpBinExclusiveScan(isNode);
-  if (warpIdx == 0)
-    shmem[8+laneIdx] = nSubNodes.x;
-  __syncthreads();
+  const int2 nSubNodes = warpBinExclusiveScan(npCell > NLEAF);
+  const int2 nLeaves   = warpBinExclusiveScan(npCell > 0 && npCell <= NLEAF);
+  if (warpIdx == 0 && laneIdx < 8)
+  {
+    shmem[8 +laneIdx] = nSubNodes.x;
+    shmem[16+laneIdx] = nLeaves.x;
+  }
 
-  int nCellmax = isNode ? nNode : 0;
+  int nCellmax = npCell;
 #pragma unroll
-  for (int i = 4; i >= 0; i--)
+  for (int i = 2; i >= 0; i--)
     nCellmax = max(nCellmax, __shfl_xor(nCellmax, 1<<i, WARP_SIZE));
 
   /* if there is at least one cell to split, increment nuumber of the nodes */
   if (threadIdx.x == 0 && nSubNodes.y > 0)
   {
-    shmem[8+8] = atomicAdd(&nnodes,nSubNodes.y);
-#if 1   /* temp solution, a better one is to use RingBuffer */
-    assert(shmem[8+8] < d_node_max);
+    shmem[16+8] = atomicAdd(&nnodes,nSubNodes.y);
+#if 0   /* temp solution, a better one is to use RingBuffer */
+    assert(shmem[16+8] < d_node_max);
 #endif
   }
-  __syncthreads();
-
 
   /* writing linking info, parent, child and particle's list */
   const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
@@ -712,19 +842,22 @@ static __global__ void buildOctant(
     /*** keep in mind, the 0-level will be overwritten ***/
     const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
     cellDataList[cellIndexBase + blockIdx.y] = cellData;
-    shmem[8+9] = cellFirstChildIndex;
+    shmem[16+9] = cellFirstChildIndex;
   }
 
   __syncthreads();
-  const int cellFirstChildIndex = shmem[8+9];
+  const int cellFirstChildIndex = shmem[16+9];
   /* compute atomic data offset for cell that need to be split */
-  const int next_node = shmem[8+8];
+  const int next_node = shmem[16+8];
   int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
+
+  const int nodeOffset = shmem[8 +warpIdx];
+  const int leafOffset = shmem[16+warpIdx];
 
   /* if cell needs to be split, populate it shared atomic data */
   if (nCell > NLEAF)
   {
-    int *octCounterN = octCounterNbase + shmem[8+warpIdx]*(8+8+8+64+8);
+    int *octCounterN = octCounterNbase + nodeOffset*(8+8+8+64+8);
 
     /* number of particles in each cell's subcells */
     const int nSubCell = laneIdx < 8 ? octCounter[8+16+warpIdx*8 + laneIdx] : 0;
@@ -760,7 +893,7 @@ static __global__ void buildOctant(
   if (nSubNodes.y > 0 && warpIdx == 0)
   {
     /* build octant mask */
-    int octant_mask = nNode > NLEAF ?  (laneIdx << (3*nSubNodes.x)) : 0;
+    int octant_mask = npCell > NLEAF ?  (laneIdx << (3*nSubNodes.x)) : 0;
 #pragma unroll
     for (int i = 4; i >= 0; i--)
       octant_mask |= __shfl_xor(octant_mask, 1<<i, WARP_SIZE);
@@ -792,14 +925,8 @@ static __global__ void buildOctant(
   /******************/
   /* process leaves */
   /******************/
-  __syncthreads();
 
-  const int2 nLeaves = warpBinExclusiveScan(laneIdx >= 8 ? 0 : shmem[laneIdx] > 0 && shmem[laneIdx] <= NLEAF);
-  if (warpIdx == 0)
-    shmem[8+laneIdx] = nLeaves.x;
-  __syncthreads();
-
-  if (shmem[warpIdx] <= NLEAF && shmem[warpIdx] > 0)
+  if (nCell <= NLEAF && nCell > 0)
   {
     if (laneIdx == 0)
     {
@@ -807,7 +934,7 @@ static __global__ void buildOctant(
       atomicAdd(&nleaves,1);
       atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
       const CellData leafData(cellIndexBase+blockIdx.y, nBeg, nEnd1);
-      cellDataList[cellFirstChildIndex + nSubNodes.y + shmem[8+warpIdx]] = leafData;
+      cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
     }
     if (!(level&1))
       for (int i = nBeg1+laneIdx; i < nEnd1; i += WARP_SIZE)
@@ -910,7 +1037,7 @@ void computeNodeProperties(
   Qxy_xz_yz.z = reduceBlock<NTHREADS>(Qxy_xz_yz.z); __syncthreads();
 #endif
 
-//  assert(monopoleM.w > 0.0);
+  //  assert(monopoleM.w > 0.0);
   const double invMass = monopoleM.w;
 
   T4 icellCOM;
