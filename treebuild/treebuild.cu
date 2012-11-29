@@ -667,8 +667,8 @@ static __global__ void buildOctant(
 #ifdef IOCOUNT
   if (threadIdx.x == 0 && blockIdx.x == 0)
     atomicAdd(&io_words, (nEnd-nBeg)*4*sizeof(T4)/sizeof(float4));
-#endif
   int nio_per_warp = 0;
+#endif
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
     dataX[threadIdx.x] = ptcl4[min(i + threadIdx.x, nEnd-1)];
@@ -710,7 +710,9 @@ static __global__ void buildOctant(
       {
         const int addr0 = laneIdx == 0 ? atomicAdd(&octCounter[8+8+warpIdx], offset.y) : -1;
         const int addrB = __shfl(addr0, 0, WARP_SIZE);
+#ifdef IOCOUNT
         nio_per_warp += offset.y*4*sizeof(T)/sizeof(float);
+#endif
 
         if (use)
         {
