@@ -381,31 +381,23 @@ static __global__ void buildOctantSingle(
     assert(shmem[8+8] < d_node_max);
 #endif
   }
-  __syncthreads();
 
-  const int next_node   = shmem[8+8];
-  int *octCounterNbase  = &memPool[next_node*(8+8+8+64+8)];
 
-  __syncthreads();
 
   /* writing linking info, parent, child and particle's list */
   const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
   if (threadIdx.x == 0 && nChildrenCell > 0)
   {
     const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
-#if 1
-    assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
-#endif
-    if (level > 0)
-    {
-      const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
-      cellDataList[cellIndexBase + blockIdx.y] = cellData;
-    }
-    shmem[8+8] = cellFirstChildIndex;
+    const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
+    cellDataList[cellIndexBase + blockIdx.y] = cellData;
+    shmem[8+9] = cellFirstChildIndex;
   }
 
   __syncthreads();
-  const int cellFirstChildIndex = shmem[8+8];
+  const int cellFirstChildIndex = shmem[8+9];
+  const int next_node   = shmem[8+8];
+  int *octCounterNbase  = &memPool[next_node*(8+8+8+64+8)];
 
   if (nCell > NLEAF)
   {
@@ -711,30 +703,23 @@ static __global__ void buildOctant(
   }
   __syncthreads();
 
-  /* compute atomic data offset for cell that need to be split */
-  const int next_node = shmem[8+8];
-  int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
-
-  __syncthreads();
 
   /* writing linking info, parent, child and particle's list */
   const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
   if (threadIdx.x == 0 && nChildrenCell > 0)
   {
     const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
-#if 1
-    assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
-#endif
-    if (level > 0)
-    {
-      const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
-      cellDataList[cellIndexBase + blockIdx.y] = cellData;
-    }
-    shmem[8+8] = cellFirstChildIndex;
+    /*** keep in mind, the 0-level will be overwritten ***/
+    const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
+    cellDataList[cellIndexBase + blockIdx.y] = cellData;
+    shmem[8+9] = cellFirstChildIndex;
   }
 
   __syncthreads();
-  const int cellFirstChildIndex = shmem[8+8];
+  const int cellFirstChildIndex = shmem[8+9];
+  /* compute atomic data offset for cell that need to be split */
+  const int next_node = shmem[8+8];
+  int *octCounterNbase = &memPool[next_node*(8+8+8+64+8)];
 
   /* if cell needs to be split, populate it shared atomic data */
   if (nCell > NLEAF)
