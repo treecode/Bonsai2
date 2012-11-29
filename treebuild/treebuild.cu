@@ -11,6 +11,16 @@
 #define WARP_SIZE2 5
 #define WARP_SIZE  32
 
+void kernelSuccess(const char kernel[] = "kernel")
+{
+  const int ret = (cudaDeviceSynchronize() != cudaSuccess);
+  if (ret)
+  {
+    fprintf(stderr, "%s launch failed: %s\n", kernel, cudaGetErrorString(cudaGetLastError()));
+    assert(0);
+  }
+}
+
 __device__ unsigned int nnodes = 0;
 __device__ unsigned int nleaves = 0;
 __device__ unsigned int nlevels = 0;
@@ -36,24 +46,28 @@ struct Particle4
 {
   typedef typename int_type<T>::type intx;
   private:
+#if 0
   union
   {
     typename vec<4,T>::type packed_data;
     struct {double _x,_y,_z; intx _id;};
   };
+#else
+  typename vec<4,T>::type packed_data;
+#endif
   public:
 
   __host__ __device__ T x   ()  const { return packed_data.x;}
   __host__ __device__ T y   ()  const { return packed_data.y;}
   __host__ __device__ T z   ()  const { return packed_data.z;}
   __host__ __device__ T mass()  const { return packed_data.w;}
-  __host__ __device__ intx id() const { return _id; }
+//  __host__ __device__ intx id() const { return _id; }
 
   __host__ __device__ T& x    () { return packed_data.x;}
   __host__ __device__ T& y    () { return packed_data.y;}
   __host__ __device__ T& z    () { return packed_data.z;}
   __host__ __device__ T& mass () { return packed_data.w;}
-  __host__ __device__ intx& id() { return _id; }
+//  __host__ __device__ intx& id() { return _id; }
 };
 
 template<typename T>
@@ -112,31 +126,6 @@ struct BoundingBox
   __device__ Position<T> centre() const {return Position<T>(T(0.5)*(max.x + min.x), T(0.5)*(max.y + min.y), T(0.5)*(max.z + min.z)); }
   __device__ Position<T>  hsize() const {return Position<T>(T(0.5)*(max.x - min.x), T(0.5)*(max.y - min.y), T(0.5)*(max.z - min.z)); }
 };
-
-template<typename T>
-struct __align__(4) ParticleLight
-{
-  Position<T> pos;
-  float     idFlt;
-  __host__ __device__ ParticleLight() {}
-  __host__ ParticleLight(const Position<T> &_pos, const int _id) : pos(_pos), idFlt(*(float*)&_id) {}
-  __device__ int d_id() const {return __float_as_int(idFlt); }
-  __device__ void shfl(const ParticleLight &p, const int i) 
-  {
-    pos.      shfl(p.pos,   i);
-    idFlt = myshfl(idFlt, p.idFlt, i);
-  }
-
-#if 0
-  __device__ ParticleLight(const float4 v) :
-    pos(v.x, v.y, v.z), idFlt(v.w) {}
-  __device__ operator float4() const {return make_float4(pos.x, pos.y, pos.z, idFlt);}
-#endif
-#if 0
-  __host__   int h_id() const {return __float_as_int(idFlt); }
-#endif
-};
-
 template<typename T>
 struct Box
 {
@@ -244,8 +233,8 @@ static __global__ void buildOctantSingle(
     CellData *cellDataList,
     const int octantMask,
     __out int *octCounterBase,
-    ParticleLight<T> *ptcl,
-    ParticleLight<T> *buff,
+    Particle4<T> *ptcl,
+    Particle4<T> *buff,
     const int level = 0)
 {
   typedef typename vec<4,T>::type T4;
@@ -623,8 +612,8 @@ static __global__ void buildOctant(
     CellData *cellDataList,
     const int octantMask,
     __out int *octCounterBase,
-    ParticleLight<T> *ptcl,
-    ParticleLight<T> *buff,
+    Particle4<T> *ptcl,
+    Particle4<T> *buff,
     const int level = 0)
 {
   typedef typename vec<4,T>::type T4;
@@ -1171,13 +1160,13 @@ static __device__ void reduceBlock(
   __syncthreads();
 }
 
-template<typename T, const int NBLOCKS, const int NTHREADS>
+template<const int NTHREADS, const int NBLOCKS, typename T>
 static __global__ void computeBoundingBox(
     const int n,
     __out Position<T> *minmax_ptr,
     __out Box<T>      *box_ptr,
     __out int *retirementCount,
-    const ParticleLight<T> *ptcl)
+    const Particle4<T> *ptclPos)
 {
   __shared__ Position<T> shmin[NTHREADS], shmax[NTHREADS];
 
@@ -1188,14 +1177,16 @@ static __global__ void computeBoundingBox(
 
   while (i < n)
   {
-    const ParticleLight<T> p = ptcl[i];
-    bmin = Position<T>::min(bmin, p.pos);
-    bmax = Position<T>::max(bmax, p.pos);
+    const Particle4<T> p = ptclPos[i];
+    const Position<T> pos(p.x(), p.y(), p.z());
+    bmin = Position<T>::min(bmin, pos);
+    bmax = Position<T>::max(bmax, pos);
     if (i + NTHREADS < n)
     {
-      const ParticleLight<T> p = ptcl[i + NTHREADS];
-      bmin = Position<T>::min(bmin, p.pos);
-      bmax = Position<T>::max(bmax, p.pos);
+      const Particle4<T> p = ptclPos[i + NTHREADS];
+      const Position<T> pos(p.x(), p.y(), p.z());
+      bmin = Position<T>::min(bmin, pos);
+      bmax = Position<T>::max(bmax, pos);
     }
     i += gridSize;
   }
@@ -1259,24 +1250,37 @@ static __global__ void computeBoundingBox(
       const Position<T> centre(hquant * T(nx), hquant * T(ny), hquant * T(nz));
 
       *box_ptr = Box<T>(centre, hsize);
-    };
+    }
   }
 }
 
+template<int NTHREADS, int NBLOCKS, typename T>
+static __global__ void computeDomainSize(const int n, const Particle4<T> *ptclPos, Box<T> *domain)
+{
+  Position<T> *minmax_ptr = new Position<T>[2*NBLOCKS];
+  int *retirementCount = new int;
+  *retirementCount = 0;
+  computeBoundingBox<NTHREADS,NBLOCKS,T><<<NBLOCKS,NTHREADS>>>(
+      n, minmax_ptr, domain, retirementCount, ptclPos);
+  cudaDeviceSynchronize();
+  delete retirementCount;
+  delete [] minmax_ptr;
+}
 
 template<typename T>
 static __global__ void countAtRootNode(
     const int n,
     __out int *octCounter,
     const Box<T> box,
-    const ParticleLight<T> *ptcl)
+    const Particle4<T> *ptclPos)
 {
   const int beg = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = beg; i < n; i += gridDim.x * blockDim.x)
     if (i < n)
     {
-      const ParticleLight<T> p = ptcl[i];
-      const int octant = Octant(box.centre, p.pos);
+      const Particle4<T> p = ptclPos[i];
+      const Position<T> pos(p.x(), p.y(), p.z());
+      const int octant = Octant(box.centre, pos);
       atomicAdd(&octCounter[8+octant],1);
     };
 
@@ -1296,37 +1300,28 @@ static __global__ void countAtRootNode(
 template<int NLEAF, typename T>
 static __global__ void buildOctree(
     const int n,
-    CellData *cellDataList,
-    int* memory_pool,
-    __out ParticleLight<T> *ptcl,
-    __out ParticleLight<T> *buff,
-    int *ncells_ret = NULL)
+    const Box<T> *domain,
+    CellData *d_cellDataList,
+    int *stack_memory_pool,
+    Particle4<T> *ptcl,
+    Particle4<T> *buff,
+    Particle4<T> *ptclVel,
+    int *ncells_return = NULL)
 {
-  typedef typename vec<4,T>::type T4;
-  memPool = memory_pool;
+  memPool = stack_memory_pool;
+  printf("n=          %d\n", n);
   printf("d_node_max= %d\n", d_node_max);
   printf("d_cell_max= %d\n", d_cell_max);
-  const int NTHREADS = 256;
-  const int NBLOCKS  = 256;
-  Box<T> *box_ptr = new Box<T>();
-  Position<T> *minmax_ptr = new Position<T>[2*NBLOCKS];
-  int *retirementCount = new int;
-  *retirementCount = 0;
-  __threadfence();
-  computeBoundingBox<T,NBLOCKS,NTHREADS><<<NBLOCKS,NTHREADS>>>(n, minmax_ptr, box_ptr, retirementCount, ptcl);
-  cudaDeviceSynchronize();
-  delete retirementCount;
-
   printf("GPU: box_centre= %g %g %g   hsize= %g\n",
-      box_ptr->centre.x,
-      box_ptr->centre.y,
-      box_ptr->centre.z,
-      box_ptr->hsize);
+      domain->centre.x,
+      domain->centre.y,
+      domain->centre.z,
+      domain->hsize);
 
   int *octCounter = new int[8+8];
   for (int k = 0; k < 16; k++)
     octCounter[k] = 0;
-  countAtRootNode<T><<<256, 256>>>(n, octCounter, *box_ptr, ptcl);
+  countAtRootNode<T><<<256, 256>>>(n, octCounter, *domain, ptcl);
   cudaDeviceSynchronize();
 
   int total = 0;
@@ -1354,7 +1349,9 @@ static __global__ void buildOctree(
     printf("k= %d n = %d offset= %d \n",
         k, octCounterN[8+k], octCounterN[8+8+k]);
 
+#ifdef IOCOUNT
   io_words = 0;
+#endif
   nnodes = 0;
   nleaves = 0;
   nlevels = 0;
@@ -1364,14 +1361,12 @@ static __global__ void buildOctree(
   octCounterN[1] = 0;
   octCounterN[2] = n;
 
-
-
   dim3 grid, block;
   computeGridAndBlockSize(grid, block, n);
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   buildOctant<NLEAF,T><<<grid, block,0,stream>>>
-    (box_ptr[0], 0, 0, cellDataList, 0, octCounterN, ptcl, buff);
+    (*domain, 0, 0, d_cellDataList, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
 
   printf(" nptcl  = %d\n", n);
@@ -1379,30 +1374,144 @@ static __global__ void buildOctree(
   printf(" nnodes = %d\n", nnodes);
   printf(" nleaves= %d\n", nleaves);
   printf(" ncells=  %d\n",  ncells);
-  if (ncells_ret != NULL)
-    *ncells_ret = ncells;
   printf(" nlevels= %d\n", nlevels);
+
+  if (ncells_return != NULL)
+    *ncells_return = ncells;
 
 #ifdef IOCOUNT
   printf(" io= %g MB \n" ,io_words*4.0/1024.0/1024.0);
 #endif
-
   delete [] octCounter;
-  delete [] minmax_ptr;
   delete [] octCounterN;
-  delete box_ptr;
 }
 
-template<typename T>
-  static __global__
-void moveParticles(const int n, 
-    const ParticleLight<T> *ptcl_idx,
-    const Particle4<T> *ptclIn, Particle4<T> *ptclOut)
+/********************************/
+/*****   DRIVING ROUTINES   *****/
+/********************************/
+
+  template<int NLEAF, typename T>
+void testTree(const int n, const unsigned int seed)
 {
-  const int idx = blockIdx.x*blockDim.x + threadIdx.x;
-  if (idx >= n) return;
-  const ParticleLight<T> &pIdx = ptcl_idx[idx];
-  ptclOut[idx] = ptclIn[pIdx.id()];
+  typedef typename vec<4,T>::type T4;
+
+  /* prepare initial conditions */
+
+  host_mem< Particle4<T> > h_ptclPos, h_ptclVel;
+  h_ptclPos.alloc(n);
+  h_ptclVel.alloc(n);
+
+#ifdef PLUMMER
+  const Plummer data(n, seed);
+  for (int i = 0; i < n; i++)
+  {
+    h_ptclPos[i].x()    = data. pos[i].x;
+    h_ptclPos[i].y()    = data. pos[i].y;
+    h_ptclPos[i].z()    = data. pos[i].z;
+    h_ptclPos[i].mass() = data.mass[i];
+    h_ptclVel[i].x()    = data. vel[i].x;
+    h_ptclVel[i].y()    = data. vel[i].y;
+    h_ptclVel[i].z()    = data. vel[i].z;
+//    h_ptclVel[i].id()   = data.mass[i];
+  }
+#else
+  for (int i = 0; i < n; i++)
+  {
+    h_ptclPos[i].mass() = 1.0/n;
+    h_ptclPos[i].x()    = drand48();
+    h_ptclPos[i].y()    = drand48();
+    h_ptclPos[i].z()    = drand48();
+    h_ptclVel[i].x()    = 0.0;
+    h_ptclVel[i].y()    = 0.0;
+    h_ptclVel[i].z()    = 0.0;
+    h_ptclVel[i].id()   = i;
+  }
+#endif
+
+  /*  copy data to the device */
+
+  cuda_mem< Particle4<T> > d_ptclPos, d_ptclVel, d_ptclPos_tmp;
+
+  d_ptclPos    .alloc(n);
+  d_ptclVel    .alloc(n);
+  d_ptclPos_tmp.alloc(n);
+
+  d_ptclPos.h2d(h_ptclPos);
+  d_ptclVel.h2d(h_ptclVel);
+  
+  /* compute bounding box */
+
+  cuda_mem< Box<T> > d_domain;
+  d_domain.alloc(1);
+  {
+    cudaDeviceSynchronize();
+    const double t0 = rtc();
+    const int NBLOCKS  = 256;
+    const int NTHREADS = 256;
+    computeDomainSize<NTHREADS,NBLOCKS,T><<<1,1>>>(n, d_ptclPos, d_domain);
+    kernelSuccess("cudaDomainSize");
+    const double t1 = rtc();
+    const double dt = t1 - t0;
+    fprintf(stderr, " cudaDomainSize done in %g sec : %g Mptcl/sec\n",  dt, n/1e6/dt);
+  }
+
+  /****** build tree *****/
+  
+  /* allocate memory for the stack nodes */
+
+  const int node_max = n/10;
+  const int nstack   = (8+8+8+64+8)*node_max;
+  fprintf(stderr, "nstack= %g MB \n", sizeof(int)*nstack/1024.0/1024.0);
+  cuda_mem<int> d_stack_memory_pool;
+  d_stack_memory_pool.alloc(nstack);
+  CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_node_max, &node_max, sizeof(int), 0, cudaMemcpyHostToDevice));
+
+  /* allocate memory for cell data */
+
+  const int cell_max = n;
+  fprintf(stderr, "celldata= %g MB \n", cell_max*sizeof(CellData)/1024.0/1024.0);
+  cuda_mem<CellData> d_cellDataList;
+  d_cellDataList.alloc(cell_max);
+  CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
+
+  /* prefer shared memory for kernels */
+
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>, cudaFuncCachePreferShared));
+
+  /**** launch tree building kernel ****/
+
+  host_mem<int> h_ncells;
+  cuda_mem<int> d_ncells;
+  h_ncells.alloc(1);
+  d_ncells.alloc(1);
+  {
+    CUDA_SAFE_CALL(cudaMemset(d_stack_memory_pool,0,nstack*sizeof(int)));
+    cudaDeviceSynchronize();
+    const double t0 = rtc();
+    buildOctree<NLEAF,T><<<1,1>>>(
+        n, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+    kernelSuccess("buildOctree");
+    const double t1 = rtc();
+    const double dt = t1 - t0;
+    fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, n/1e6/dt);
+  }
+
+  /******** now particles are sorted, build tree again ******/
+
+  {
+    CUDA_SAFE_CALL(cudaMemset(d_stack_memory_pool,0,nstack*sizeof(int)));
+    cudaDeviceSynchronize();
+    const double t0 = rtc();
+    buildOctree<NLEAF,T><<<1,1>>>(
+        n, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel, d_ncells);
+    kernelSuccess("buildOctree");
+    d_ncells.d2h(h_ncells);
+    const double t1 = rtc();
+    const double dt = t1 - t0;
+    fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, n/1e6/dt);
+  }
+
 }
 
 int main(int argc, char * argv [])
@@ -1423,171 +1532,12 @@ int main(int argc, char * argv [])
   typedef float real;
 #endif
 
-  typedef typename vec<4, real>::type real4;
-
-  host_mem< ParticleLight<real> > h_ptcl;
-  host_mem< Particle4<real> > h_ptclPos;
-  h_ptcl.alloc(n);
-  h_ptclPos.alloc(n);
-#ifdef PLUMMER
-  const Plummer data(n, argc > 2 ? atoi(argv[2]) : 19810614);
-  for (int i = 0; i < n; i++)
-  {
-    h_ptcl[i] = ParticleLight<real>(Position<real>(data.pos[i].x, data.pos[i].y, data.pos[i].z), i);
-    h_ptclPos[i].x()    = data.pos[i].x;
-    h_ptclPos[i].y()    = data.pos[i].y;
-    h_ptclPos[i].z()    = data.pos[i].z;
-    h_ptclPos[i].mass() = 1.0/n;
-  }
-#else
-  for (int i = 0; i < n; i++)
-  {
-    h_ptcl[i] = ParticleLight<real>(Position<real>(drand48(), drand48(), drand48()), i);
-    h_ptclPos[i].x()    = h_ptcl[i].x;
-    h_ptclPos[i].y()    = h_ptcl[i].y;
-    h_ptclPos[i].z()    = h_ptcl[i].z;
-    h_ptclPos[i].mass() = 1.0/n;
-  }
-#endif
-  Position<real> bmin(+1e10), bmax(-1e10);
-  for (int i = 0; i < n; i++)
-  {
-    //    printf("%g %g %g \n", h_ptcl[i].pos.x, h_ptcl[i].pos.y, h_ptcl[i].pos.z);
-    bmin = Position<real>::min(bmin, h_ptcl[i].pos);
-    bmax = Position<real>::max(bmax, h_ptcl[i].pos);
-  }
-  //  exit(0);
-  const Position<real> cvec((bmax.x+bmin.x)*(0.5), (bmax.y+bmin.y)*(0.5), (bmax.z+bmin.z)*(0.5));
-  const Position<real> hvec((bmax.x-bmin.x)*(0.5), (bmax.y-bmin.y)*(0.5), (bmax.z-bmin.z)*(0.5));
-  const real h = fmax(hvec.z, fmax(hvec.y, hvec.x));
-  real hsize = (1.0);
-  while (hsize > h) hsize *= (0.5);
-  while (hsize < h) hsize *= (2.0);
-
-  fprintf(stderr, "bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);
-  fprintf(stderr, "bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
-
-  printf("box_centre= %g %g %g   hsize= %g\n",
-      cvec.x,
-      cvec.y,
-      cvec.z,
-      hsize);
-
-  cuda_mem< ParticleLight<real> > d_ptcl1, d_ptcl2;
-  cuda_mem< Particle4<real> > d_ptclPos;
-  d_ptcl1.alloc(n);
-  d_ptcl2.alloc(n);
-  d_ptclPos.alloc(n);
-  d_ptcl1.h2d(h_ptcl);
-  d_ptclPos.h2d(h_ptclPos);
-
-
-  int node_max = n/10;
-  int cell_max = n;
-
-  cuda_mem<int> memory_pool;
-  const unsigned long long nstack = (8+8+8+64+8)*node_max;
-  fprintf(stderr, " nstack= %g MB \n", sizeof(int)*nstack/1024.0/1024.0);
-
-  memory_pool.alloc(nstack);
-  CUDA_SAFE_CALL(cudaMemset(memory_pool,0,nstack*sizeof(int)));
-
-  CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_node_max, &node_max, sizeof(int), 0, cudaMemcpyHostToDevice));
-
-
-  cuda_mem<CellData> cellDataList;
-  cellDataList.alloc(cell_max);
-  CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
-
-
 #ifndef NPERLEAF
   const int NLEAF = 16;
 #else
   const int NLEAF = NPERLEAF;
 #endif
 
-#if 0
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferL1));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferL1));
-#elif 1
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeNodeProperties<64, real>, cudaFuncCachePreferShared));
-#else
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant<NLEAF, real>, cudaFuncCachePreferEqual));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF, real>, cudaFuncCachePreferEqual));
-#endif
-
-  {
-    const double t0 = rtc();
-    buildOctree<NLEAF, real><<<1,1>>>(n, cellDataList, memory_pool, d_ptcl1, d_ptcl2);
-    const int ret = (cudaDeviceSynchronize() != cudaSuccess);
-    if (ret)
-    {
-      fprintf(stderr, "CNP tree launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
-      assert(0);
-    }
-
-    const double t1 = rtc();
-    const double dt = t1 - t0;
-
-    fprintf(stderr, " done in %g sec : %g Mptcl/sec\n",
-        dt, n/1e6/dt);
-  }
-
-  CUDA_SAFE_CALL(cudaMemset(memory_pool,0,nstack*sizeof(int)));
-
-  {
-    const double t0 = rtc();
-    cuda_mem<int> d_ncells;
-    host_mem<int> h_ncells;
-    d_ncells.alloc(1);
-    h_ncells.alloc(1);
-    buildOctree<NLEAF, real><<<1,1>>>(n, cellDataList, memory_pool, d_ptcl1, d_ptcl2, d_ncells);
-    const int ret = (cudaDeviceSynchronize() != cudaSuccess);
-    if (ret)
-      fprintf(stderr, "CNP tree launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
-
-    const double t1 = rtc();
-    const double dt = t1 - t0;
-
-    fprintf(stderr, " tree done in %g sec : %g Mptcl/sec\n",
-        dt, n/1e6/dt);
-
-    d_ncells.d2h(h_ncells);
-    const int ncells = h_ncells[0];
-    fprintf(stderr, "ncells= %d\n", ncells);
-
-    cuda_mem<real4> d_cellCOM, d_cellQMxx_yy_zz_m, d_cellQMxy_xz_yz;
-    d_cellCOM.alloc(ncells);
-    d_cellQMxx_yy_zz_m.alloc(ncells);
-    d_cellQMxy_xz_yz.alloc(ncells);
-
-    cudaDeviceSynchronize();
-    {
-      const double t0 = rtc();
-      const int NTHREADS=128;
-      computeNodeProperties<NTHREADS,real><<<ncells,NTHREADS,sizeof(double)*NTHREADS>>>(
-          n,
-          cellDataList,
-          d_ptclPos,
-          d_cellCOM,
-          d_cellQMxx_yy_zz_m,
-          d_cellQMxy_xz_yz);
-      const int ret = (cudaDeviceSynchronize() != cudaSuccess);
-      if (ret)
-      {
-        fprintf(stderr, "computeNodePorperties launch failed: %s\n", cudaGetErrorString(cudaGetLastError()));
-        assert(0);
-      }
-      const double t1 = rtc();
-      const double dt = t1 - t0;
-
-      fprintf(stderr, " properties done in %g sec : %g Mptcl/sec\n",
-          dt, n/1e6/dt);
-    }
-
-
-  }
+  testTree<NLEAF, real>(n, argc > 2 ? atoi(argv[2]) : 19810614);
 
 };
