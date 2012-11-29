@@ -24,21 +24,32 @@ __constant__ int d_cell_max;
 __device__ unsigned long long io_words;
 
 template<int N, typename T> struct vec;
-template<> struct vec<4,float>  { typedef float4  id_t; };
-template<> struct vec<4,double> { typedef double4 id_t; };
+template<> struct vec<4,float>  { typedef float4  type; };
+template<> struct vec<4,double> { typedef double4 type; };
 
-#if 0
-template<typename T> struct ParticlePos;
+template<typename T> struct int_type;
+template<> struct int_type<float>  { typedef int       type; };
+template<> struct int_type<double> { typedef long long type; };
 
-template<> struct ParticlePos<double>
+template<typename T> 
+struct Particle4
 {
-  double4 packed_data;
-  double x() const { return packed_data.x;}
-  double y() const { return packed_data.y;}
-  double z() const { return packed_data.z;}
-  double mass() const {return packed_data.w;}
-}
-#endif
+  union
+  {
+    typename vec<4,T>::type packed_data;
+    struct {double _x,_y,_z; int_type<T> _id;};
+  };
+
+  __device__ T x   () const { return packed_data.x;}
+  __device__ T y   () const { return packed_data.y;}
+  __device__ T z   () const { return packed_data.z;}
+  __device__ T mass() const { return packed_data.w;}
+
+  __device__ T& x   () { return packed_data.x;}
+  __device__ T& y   () { return packed_data.y;}
+  __device__ T& z   () { return packed_data.z;}
+  __device__ T& mass() { return packed_data.w;}
+};
 
 template<typename T>
 struct Position
@@ -232,7 +243,7 @@ static __global__ void buildOctantSingle(
     ParticleLight<T> *buff,
     const int level = 0)
 {
-  typedef typename vec<4,T>::id_t T4;
+  typedef typename vec<4,T>::type T4;
   const int laneId = threadIdx.x & (WARP_SIZE-1);
   const int warpId = threadIdx.x >> WARP_SIZE2;
 
@@ -480,7 +491,7 @@ static __global__ void buildOctant(
     ParticleLight<T> *buff,
     const int level = 0)
 {
-  typedef typename vec<4,T>::id_t T4;
+  typedef typename vec<4,T>::type T4;
   /* compute laneId & warpId for each of the threads:
    *   the thread block contains only 8 warps
    *   a warp is responsible for a single octant of the cell 
@@ -847,17 +858,17 @@ static __device__ double reduceBlock(double sum)
   return sh[0];
 };
 
-#if 0
 template<int NTHREADS, typename T>
 static __global__ 
 void computeNodeProperties(
-    const CellData       *cellDataList,
-    const ParticlePos<T> *ptclPosList,
-    vec<4,T> *cellCOM,
-    vec<4,T> *cellQMxx_yy_zz_m,
-    vec<4,T> *cellQMxy_xz_yz)
+    const CellData     *cellDataList,
+    const Particle4<T> *ptclPosList,
+    typename vec<4,T>::type *cellCOM,
+    typename vec<4,T>::type *cellQMxx_yy_zz_m,
+    typename vec<4,T>::type *cellQMxy_xz_yz)
 {
-  const int cellIdx = blockIdx;
+  typedef typename vec<4,T>::type T4;
+  const int cellIdx = blockIdx.x;
   const CellData cellData = cellDataList[cellIdx];
 
   double4 monopoleM = {0.0, 0.0, 0.0, 0.0};
@@ -867,8 +878,11 @@ void computeNodeProperties(
 
   for (int i = cellData.pbeg(); i < cellData.pend(); i += blockDim.x)
   {
-    const bool mask = i + thraadIdx.x < cellData.pend();
-    const Particle<T> ip = ptclList[min(i + threadIdx.x, cellData.pend()-1)];
+    const bool mask = i + threadIdx.x < cellData.pend();
+    const Particle4<T> ip = ptclPosList[min(i + threadIdx.x, cellData.pend()-1)];
+
+    double mass = mask ? ip.mass() : 0.0; 
+    double3 pos = make_double3(ip.x(), ip.y(), ip.z());
 
     monopoleM.x += mass * pos.x;
     monopoleM.y += mass * pos.y;
@@ -884,18 +898,18 @@ void computeNodeProperties(
     Qxy_xz_yz.z += mass * pos.y*pos.z;
   }
 
-  monopoleM.x = reduceBlock<NTHEADS>(monopoleM.x); __syncthreads();
-  monopoleM.y = reduceBlock<NTHEADS>(monopoleM.y); __syncthreads();
-  monopoleM.z = reduceBlock<NTHEADS>(monopoleM.z); __syncthreads();
-  monopoleM.w = reduceBlock<NTHEADS>(monopoleM.w); __syncthreads();
+  monopoleM.x = reduceBlock<NTHREADS>(monopoleM.x); __syncthreads();
+  monopoleM.y = reduceBlock<NTHREADS>(monopoleM.y); __syncthreads();
+  monopoleM.z = reduceBlock<NTHREADS>(monopoleM.z); __syncthreads();
+  monopoleM.w = reduceBlock<NTHREADS>(monopoleM.w); __syncthreads();
   
-  Qxx_yy_zz.x = reduceBlock<NTHEADS>(Qxx_yy_zz.x); __syncthreads();
-  Qxx_yy_zz.y = reduceBlock<NTHEADS>(Qxx_yy_zz.y); __syncthreads();
-  Qxx_yy_zz.z = reduceBlock<NTHEADS>(Qxx_yy_zz.z); __syncthreads();
+  Qxx_yy_zz.x = reduceBlock<NTHREADS>(Qxx_yy_zz.x); __syncthreads();
+  Qxx_yy_zz.y = reduceBlock<NTHREADS>(Qxx_yy_zz.y); __syncthreads();
+  Qxx_yy_zz.z = reduceBlock<NTHREADS>(Qxx_yy_zz.z); __syncthreads();
   
-  Qxy_xz_yz.x = reduceBlock<NTHEADS>(Qxy_yz_yz.x); __syncthreads();
-  Qxy_xz_yz.y = reduceBlock<NTHEADS>(Qxy_yz_yz.y); __syncthreads();
-  Qxy_xz_yz.z = reduceBlock<NTHEADS>(Qxy_yz_yz.z); __syncthreads();
+  Qxy_xz_yz.x = reduceBlock<NTHREADS>(Qxy_xz_yz.x); __syncthreads();
+  Qxy_xz_yz.y = reduceBlock<NTHREADS>(Qxy_xz_yz.y); __syncthreads();
+  Qxy_xz_yz.z = reduceBlock<NTHREADS>(Qxy_xz_yz.z); __syncthreads();
 
   assert(monopoleM.w > 0.0);
   const double invMass = 1.0/monopoleM.w;
@@ -904,7 +918,7 @@ void computeNodeProperties(
   icellCOM.x = T(monopoleM.x * invMass);
   icellCOM.y = T(monopoleM.y * invMass);
   icellCOM.z = T(monopoleM.z * invMass);
-  icelLCOM.w = -1.0;
+  icellCOM.w = -1.0;
   cellCOM[cellIdx] = icellCOM;
   
   T4 icellQxx_yy_zz_m;
@@ -912,16 +926,15 @@ void computeNodeProperties(
   icellQxx_yy_zz_m.y = T(Qxx_yy_zz.y);
   icellQxx_yy_zz_m.z = T(Qxx_yy_zz.z);
   icellQxx_yy_zz_m.w = T(monopoleM.w);
-  cellQxx_yy_zz_m[cellIdx] = icellQxx_yy_zz_m;
+  cellQMxx_yy_zz_m[cellIdx] = icellQxx_yy_zz_m;
 
   T4 icellQxy_xz_yz;
   icellQxy_xz_yz.x = T(Qxy_xz_yz.x);
   icellQxy_xz_yz.y = T(Qxy_xz_yz.y);
   icellQxy_xz_yz.z = T(Qxy_xz_yz.z);
   icellQxy_xz_yz.w = T(0.0);
-  cellQxy_xz_yz[cellIdx] = icellQxy_xz_yz;
+  cellQMxy_xz_yz[cellIdx] = icellQxy_xz_yz;
 }
-#endif
 
 
 /****** not very tuned kernels to do preparatory stuff ********/
