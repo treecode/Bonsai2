@@ -34,21 +34,26 @@ template<> struct int_type<double> { typedef long long type; };
 template<typename T> 
 struct Particle4
 {
+  typedef typename int_type<T>::type intx;
+  private:
   union
   {
     typename vec<4,T>::type packed_data;
-    struct {double _x,_y,_z; int_type<T> _id;};
+    struct {double _x,_y,_z; intx _id;};
   };
+  public:
 
-  __host__ __device__ T x   () const { return packed_data.x;}
-  __host__ __device__ T y   () const { return packed_data.y;}
-  __host__ __device__ T z   () const { return packed_data.z;}
-  __host__ __device__ T mass() const { return packed_data.w;}
+  __host__ __device__ T x   ()  const { return packed_data.x;}
+  __host__ __device__ T y   ()  const { return packed_data.y;}
+  __host__ __device__ T z   ()  const { return packed_data.z;}
+  __host__ __device__ T mass()  const { return packed_data.w;}
+  __host__ __device__ intx id() const { return _id; }
 
-  __host__ __device__ T& x   () { return packed_data.x;}
-  __host__ __device__ T& y   () { return packed_data.y;}
-  __host__ __device__ T& z   () { return packed_data.z;}
-  __host__ __device__ T& mass() { return packed_data.w;}
+  __host__ __device__ T& x    () { return packed_data.x;}
+  __host__ __device__ T& y    () { return packed_data.y;}
+  __host__ __device__ T& z    () { return packed_data.z;}
+  __host__ __device__ T& mass () { return packed_data.w;}
+  __host__ __device__ intx& id() { return _id; }
 };
 
 template<typename T>
@@ -413,7 +418,7 @@ static __global__ void buildOctantSingle(
     int *octCounterN = octCounterNbase + nodeOffset*(8+8+8+64+8);
 
     /* number of particles in each cell's subcells */
-//    const int nSubCell = laneIdx < 8 ? octCounter[8+16+warpIdx*8 + laneIdx] : 0;
+    //    const int nSubCell = laneIdx < 8 ? octCounter[8+16+warpIdx*8 + laneIdx] : 0;
 
     /* compute offsets */
     int cellOffset = nSubCell;
