@@ -23,60 +23,22 @@ __constant__ int d_node_max;
 __constant__ int d_cell_max;
 __device__ unsigned long long io_words;
 
-template<int N, typename T>
-struct vec;
+template<int N, typename T> struct vec;
+template<> struct vec<4,float>  { typedef float4  id_t; };
+template<> struct vec<4,double> { typedef double4 id_t; };
 
-template<> struct vec<4,float>
+#if 0
+template<typename T> struct ParticlePos;
+
+template<> struct ParticlePos<double>
 {
-  union
-  {
-    struct {float x,y,z,w;};
-    float4 val;
-  };
-
-  __device__ vec() {}
-  __device__ vec(const float4 vec) : val(vec) {}
-  __device__ operator float4() {return val;}
-};
-
-template<> struct vec<4,double>
-{
-  union
-  {
-    struct {double x,y,z,w;};
-    double4 val;
-  };
-
-  __device__ vec() {}
-  __device__ vec(const double4 vec) : val(vec) {}
-  __device__ operator double4() {return val;}
-};
-
-template<> struct vec<3,float>
-{
-  union
-  {
-    struct {float x,y,z;};
-    float3 val;
-  };
-
-  __device__ vec() {}
-  __device__ vec(const float3 vec) : val(vec) {}
-  __device__ operator float3() {return val;}
-};
-
-template<> struct vec<3,double>
-{
-  union
-  {
-    struct {double x,y,z;};
-    double3 val;
-  };
-
-  __device__ vec() {}
-  __device__ vec(const double3 vec) : val(vec) {}
-  __device__ operator double3() {return val;}
-};
+  double4 packed_data;
+  double x() const { return packed_data.x;}
+  double y() const { return packed_data.y;}
+  double z() const { return packed_data.z;}
+  double mass() const {return packed_data.w;}
+}
+#endif
 
 template<typename T>
 struct Position
@@ -270,7 +232,7 @@ static __global__ void buildOctantSingle(
     ParticleLight<T> *buff,
     const int level = 0)
 {
-  typedef vec<4,T> T4;
+  typedef typename vec<4,T>::id_t T4;
   const int laneId = threadIdx.x & (WARP_SIZE-1);
   const int warpId = threadIdx.x >> WARP_SIZE2;
 
@@ -518,7 +480,7 @@ static __global__ void buildOctant(
     ParticleLight<T> *buff,
     const int level = 0)
 {
-  typedef vec<4,T> T4;
+  typedef typename vec<4,T>::id_t T4;
   /* compute laneId & warpId for each of the threads:
    *   the thread block contains only 8 warps
    *   a warp is responsible for a single octant of the cell 
@@ -886,14 +848,14 @@ static __device__ double reduceBlock(double sum)
 };
 
 #if 0
-template<int NTHREADS, typename T, typename T4>
+template<int NTHREADS, typename T>
 static __global__ 
 void computeNodeProperties(
-    const CellData    *cellDataList,
-    const Particle<T> *ptclList,
-    T4 *cellCOM,
-    T4 *cellQMxx_yy_zz_m,
-    T4 *cellQMxy_xz_yz)
+    const CellData       *cellDataList,
+    const ParticlePos<T> *ptclPosList,
+    vec<4,T> *cellCOM,
+    vec<4,T> *cellQMxx_yy_zz_m,
+    vec<4,T> *cellQMxy_xz_yz)
 {
   const int cellIdx = blockIdx;
   const CellData cellData = cellDataList[cellIdx];
