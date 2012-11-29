@@ -81,8 +81,8 @@ struct Particle4
   __host__ __device__ T z   ()  const { return packed_data.z;}
   __host__ __device__ T mass()  const { return packed_data.w;}
 //  __host__ __device__ intx id() const { return _id; }
-  __device__ int get_id() const;
-  __device__ int set_id(const int i);
+  __forceinline__ __device__ int get_idx() const;
+  __forceinline__ __device__ int set_idx(const int i);
 
   __host__ __device__ T& x    () { return packed_data.x;}
   __host__ __device__ T& y    () { return packed_data.y;}
@@ -106,11 +106,11 @@ __constant__ int d_cell_max;
 __device__ unsigned long long io_words;
 
 
-template<> int Particle4<float>::get_id() const
+template<> __device__ __forceinline__ int Particle4<float>::get_idx() const
 {
   return __float_as_int(packed_data.w);
 }
-template<> int Particle4<float>::set_id(const int id) 
+template<> __device__ __forceinline__ int Particle4<float>::set_idx(const int id) 
 {
   packed_data.w = __int_as_float(id);
   return id;
@@ -492,9 +492,9 @@ static __global__ void buildOctantSingle(
         if (i < nEnd1)
         {
           Particle4<T> pos = buff[i];
-          Particle4<T> vel = ptclVel[pos.get_id()];
+          Particle4<T> vel = ptclVel[pos.get_idx()];
 #ifdef PSHFL_SANITY_CHECK
-          pos.mass() = T(pos.get_id());
+          pos.mass() = T(pos.get_idx());
 #else
           pos.mass() = vel.mass();
 #endif
@@ -508,9 +508,9 @@ static __global__ void buildOctantSingle(
         if (i < nEnd1)
         {
           Particle4<T> pos = buff[i];
-          Particle4<T> vel = ptclVel[pos.get_id()];
+          Particle4<T> vel = ptclVel[pos.get_idx()];
 #ifdef PSHFL_SANITY_CHECK
-          pos.mass() = T(pos.get_id());
+          pos.mass() = T(pos.get_idx());
 #else
           pos.mass() = vel.mass();
 #endif
@@ -593,7 +593,7 @@ static __global__ void buildOctant(
 
       Particle4<T> p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
       if (STOREIDX)
-        p4.set_id(addr);
+        p4.set_idx(addr);
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -856,9 +856,9 @@ static __global__ void buildOctant(
         if (i < nEnd1)
         {
           Particle4<T> pos = buff[i];
-          Particle4<T> vel = ptclVel[pos.get_id()];
+          Particle4<T> vel = ptclVel[pos.get_idx()];
 #ifdef PSHFL_SANITY_CHECK
-          pos.mass() = T(pos.get_id());
+          pos.mass() = T(pos.get_idx());
 #else
           pos.mass() = vel.mass();
 #endif
@@ -872,9 +872,9 @@ static __global__ void buildOctant(
         if (i < nEnd1)
         {
           Particle4<T> pos = buff[i];
-          Particle4<T> vel = ptclVel[pos.get_id()];
+          Particle4<T> vel = ptclVel[pos.get_idx()];
 #ifdef PSHFL_SANITY_CHECK
-          pos.mass() = T(pos.get_id());
+          pos.mass() = T(pos.get_idx());
 #else
           pos.mass() = vel.mass();
 #endif
