@@ -21,18 +21,6 @@ void kernelSuccess(const char kernel[] = "kernel")
   }
 }
 
-__device__ unsigned int nnodes = 0;
-__device__ unsigned int nleaves = 0;
-__device__ unsigned int nlevels = 0;
-__device__ unsigned int nbodies_leaf = 0;
-__device__ unsigned int ncells = 0;
-
-
-__device__   int *memPool;
-__constant__ int d_node_max;
-__constant__ int d_cell_max;
-__device__ unsigned long long io_words;
-
 template<int N, typename T> struct vec;
 template<> struct vec<4,float>  { typedef float4  type; };
 template<> struct vec<4,double> { typedef double4 type; };
@@ -40,6 +28,37 @@ template<> struct vec<4,double> { typedef double4 type; };
 template<typename T> struct int_type;
 template<> struct int_type<float>  { typedef int       type; };
 template<> struct int_type<double> { typedef long long type; };
+
+
+struct CellData
+{
+  private:
+    enum {NLEAF_SHIFT = 29};
+    enum {NLEAF_MASK  = (0x1FU << NLEAF_SHIFT)};
+    uint4 packed_data;
+  public:
+    __device__ CellData(
+        const unsigned int parentCell,
+        const unsigned int nBeg,
+        const unsigned int nEnd,
+        const unsigned int first = 0xFFFFFFFF,
+        const unsigned int n = 0xFFFFFFFF)
+    {
+      int packed_firstleaf_n = 0xFFFFFFFF;
+      if (n != 0xFFFFFFFF)
+        packed_firstleaf_n = first | ((unsigned int)n << NLEAF_SHIFT);
+      packed_data = make_uint4(parentCell, packed_firstleaf_n, nBeg, nEnd);
+    }
+
+    __device__ int n()      const {return packed_data.y >> NLEAF_SHIFT;}
+    __device__ int first()  const {return packed_data.y  & NLEAF_MASK;}
+    __device__ int parent() const {return packed_data.x;}
+    __device__ int pbeg()   const {return packed_data.z;}
+    __device__ int pend()   const {return packed_data.w;}
+
+    __device__ bool isLeaf() const {return packed_data.y == 0xFFFFFFFF;}
+    __device__ bool isNode() const {return !isLeaf();}
+};
 
 template<typename T> 
 struct Particle4
@@ -62,6 +81,8 @@ struct Particle4
   __host__ __device__ T z   ()  const { return packed_data.z;}
   __host__ __device__ T mass()  const { return packed_data.w;}
 //  __host__ __device__ intx id() const { return _id; }
+  __device__ int get_id() const;
+  __device__ int set_id(const int i);
 
   __host__ __device__ T& x    () { return packed_data.x;}
   __host__ __device__ T& y    () { return packed_data.y;}
@@ -69,6 +90,31 @@ struct Particle4
   __host__ __device__ T& mass () { return packed_data.w;}
 //  __host__ __device__ intx& id() { return _id; }
 };
+
+__device__ unsigned int nnodes = 0;
+__device__ unsigned int nleaves = 0;
+__device__ unsigned int nlevels = 0;
+__device__ unsigned int nbodies_leaf = 0;
+__device__ unsigned int ncells = 0;
+
+
+__device__   int *memPool;
+__device__   CellData *cellDataList;
+__device__   Particle4<float> *ptclVel;
+__constant__ int d_node_max;
+__constant__ int d_cell_max;
+__device__ unsigned long long io_words;
+
+
+template<> int Particle4<float>::get_id() const
+{
+  return __float_as_int(packed_data.w);
+}
+template<> int Particle4<float>::set_id(const int id) 
+{
+  packed_data.w = __int_as_float(id);
+  return id;
+}
 
 template<typename T>
 struct Position
@@ -195,47 +241,17 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
   return __popc(b);
 }
 
-struct CellData
-{
-  private:
-    enum {NLEAF_SHIFT = 29};
-    enum {NLEAF_MASK  = (0x1FU << NLEAF_SHIFT)};
-    uint4 packed_data;
-  public:
-    __device__ CellData(
-        const unsigned int parentCell,
-        const unsigned int nBeg,
-        const unsigned int nEnd,
-        const unsigned int first = 0xFFFFFFFF,
-        const unsigned int n = 0xFFFFFFFF)
-    {
-      int packed_firstleaf_n = 0xFFFFFFFF;
-      if (n != 0xFFFFFFFF)
-        packed_firstleaf_n = first | ((unsigned int)n << NLEAF_SHIFT);
-      packed_data = make_uint4(parentCell, packed_firstleaf_n, nBeg, nEnd);
-    }
-
-    __device__ int n()      const {return packed_data.y >> NLEAF_SHIFT;}
-    __device__ int first()  const {return packed_data.y  & NLEAF_MASK;}
-    __device__ int parent() const {return packed_data.x;}
-    __device__ int pbeg()   const {return packed_data.z;}
-    __device__ int pend()   const {return packed_data.w;}
-
-    __device__ bool isLeaf() const {return packed_data.y == 0xFFFFFFFF;}
-    __device__ bool isNode() const {return !isLeaf();}
-};
 
 template<int NLEAF, typename T>
 static __global__ void buildOctantSingle(
     Box<T> box,
     const int cellParentIndex,
     const int cellIndexBase,
-    CellData *cellDataList,
     const int octantMask,
     __out int *octCounterBase,
     Particle4<T> *ptcl,
     Particle4<T> *buff,
-    const int level = 0)
+    const int level)
 {
   typedef typename vec<4,T>::type T4;
   const int laneIdx = threadIdx.x & (WARP_SIZE-1);
@@ -262,13 +278,10 @@ static __global__ void buildOctantSingle(
 
   assert(blockIdx.x == 0);
 
-  T4* ptcl4 = (T4*)ptcl;
-  T4* buff4=  (T4*)buff;
-
-  __shared__ T4 dataX[8*WARP_SIZE];
+  __shared__ Particle4<T> dataX[8*WARP_SIZE];
 
   /* process particle array */
-  dataX[threadIdx.x] = ptcl4[min(nBeg + threadIdx.x, nEnd-1)];
+  dataX[threadIdx.x] = ptcl[min(nBeg + threadIdx.x, nEnd-1)];
   __syncthreads(); 
 
 #pragma unroll
@@ -279,7 +292,7 @@ static __global__ void buildOctantSingle(
     const int  addr = nBeg + locid;
     const bool mask = addr < nEnd;
 
-    const T4 p4 = dataX[locid];
+    const Particle4<T> p4 = dataX[locid];
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
     { 
@@ -299,7 +312,7 @@ static __global__ void buildOctantSingle(
 #endif
 
     /* use prefix sums to compute offset to where scatter particles */
-    const Position<T> pos(p4.x,p4.y,p4.z);
+    const Position<T> pos(p4.x(),p4.y(),p4.z());
     const int     use = mask && (Octant(box.centre, pos) == warpIdx);
     const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
@@ -311,7 +324,7 @@ static __global__ void buildOctantSingle(
       int subOctant = -1;
       if (use)
       {
-        buff4[addrB+offset.x] = p4;         /* float4 vector stores   */
+        buff[addrB+offset.x] = p4;         /* float4 vector stores   */
         subOctant = Octant(childBox.centre, pos);
       }
 
@@ -355,7 +368,6 @@ static __global__ void buildOctantSingle(
     shmem[warpIdx] = nCell;
   __syncthreads();
 
-#if 1
   const int npCell = laneIdx < 8 ? shmem[laneIdx] : 0;
 
   /* compute number of children that needs to be further split, and cmopute their offsets */
@@ -455,7 +467,7 @@ static __global__ void buildOctantSingle(
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
       grid.x = 1;
       buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
-        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
          octant_mask, octCounterNbase, buff, ptcl, level+1);
     }
   }
@@ -474,131 +486,40 @@ static __global__ void buildOctantSingle(
       const CellData leafData(cellIndexBase+blockIdx.y, nBeg, nEnd1);
       cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
     }
-    if (!(level&1))
+    if ((level&1) == 0)
+    {
       for (int i = nBeg1+laneIdx; i < nEnd1; i += WARP_SIZE)
         if (i < nEnd1)
-          ptcl4[i] = buff4[i];
-  }
+        {
+          Particle4<T> pos = buff[i];
+          Particle4<T> vel = ptclVel[pos.get_id()];
+#ifdef PSHFL_SANITY_CHECK
+          pos.mass() = T(pos.get_id());
+#else
+          pos.mass() = vel.mass();
 #endif
-
-#if 0
-
-  const bool isNode = shmem[laneIdx] > NLEAF;
-  const int   nNode = isNode ? shmem[laneIdx] : 0;
-
-  const int2 nSubNodes = warpBinExclusiveScan(isNode);
-  if (warpIdx == 0)
-    shmem[8+laneIdx] = nSubNodes.x;
-  __syncthreads();
-
-  int nCellmax = isNode ? nNode : 0;
-#pragma unroll
-  for (int i = 4; i >= 0; i--)
-    nCellmax = max(nCellmax, __shfl_xor(nCellmax, 1<<i, WARP_SIZE));
-
-  if (threadIdx.x == 0 && nSubNodes.y > 0)
-  {
-    shmem[8+8] = atomicAdd(&nnodes,nSubNodes.y);
-#if 1   /* temp solution, a better one is to use RingBuffer */
-    assert(shmem[8+8] < d_node_max);
-#endif
-  }
-
-
-
-  /* writing linking info, parent, child and particle's list */
-  const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
-  if (threadIdx.x == 0 && nChildrenCell > 0)
-  {
-    const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
-    const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
-    cellDataList[cellIndexBase + blockIdx.y] = cellData;
-    shmem[8+9] = cellFirstChildIndex;
-  }
-
-  __syncthreads();
-  const int cellFirstChildIndex = shmem[8+9];
-  const int next_node   = shmem[8+8];
-  int *octCounterNbase  = &memPool[next_node*(8+8+8+64+8)];
-
-  if (nCell > NLEAF)
-  {
-    int  *octCounterN = octCounterNbase + shmem[8+warpIdx]*(8+8+8+64+8);
-
-    /* compute offsets */
-    int cellOffset = nSubCell;
-#pragma unroll
-    for(int i = 0; i < 3; i++)  /* log2(8) steps */
-      cellOffset = shfl_scan_add_step(cellOffset, 1 << i);
-    cellOffset -= nSubCell;
-
-    /* store offset in memory */
-
-    cellOffset = __shfl_up(cellOffset, 8, WARP_SIZE);
-    if (laneIdx < 8) cellOffset = nSubCell;
-    else            cellOffset += nBeg1;
-    cellOffset = __shfl_up(cellOffset, 8, WARP_SIZE);
-
-    if (laneIdx <  8) cellOffset = 0;
-    if (laneIdx == 1) cellOffset = nBeg1;
-    if (laneIdx == 2) cellOffset = nEnd1;
-
-    if (laneIdx < 24)
-      octCounterN[laneIdx] = cellOffset;
-  }
-
-  /***************************/
-  /*  launch  child  kernel  */
-  /***************************/
-
-  if (nSubNodes.y > 0 && warpIdx == 0)
-  {
-    int octant_mask = nNode > NLEAF ?  (laneIdx << (3*nSubNodes.x)) : 0;
-#pragma unroll
-    for (int i = 4; i >= 0; i--)
-      octant_mask |= __shfl_xor(octant_mask, 1<<i, WARP_SIZE);
-
-    if (threadIdx.x == 0)
-    {
-      dim3 grid, block;
-      computeGridAndBlockSize(grid, block, nCellmax);
-      cudaStream_t stream;
-      cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-
-      grid.x = 1;
-      grid.y = nSubNodes.y;
-      buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
-        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
-         octant_mask, octCounterNbase, buff, ptcl, level+1);
+          ptcl[i] = pos;
+          buff[i] = vel;
+        }
     }
-  }
-
-  /******************/
-  /* process leaves */
-  /******************/
-  __syncthreads();
-
-  const int2 nLeaves = warpBinExclusiveScan(laneIdx >= 8 ? 0 : shmem[laneIdx] > 0 && shmem[laneIdx] <= NLEAF);
-  if (warpIdx == 0)
-    shmem[8+laneIdx] = nLeaves.x;
-  __syncthreads();
-
-  if (shmem[warpIdx] <= NLEAF && shmem[warpIdx] > 0)
-  {
-    if (laneIdx == 0)
+    else
     {
-      assert(nEnd1 - nBeg1 <= NLEAF);
-      atomicAdd(&nleaves,1);
-      atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
-      const CellData leafData(cellIndexBase+blockIdx.y, nBeg, nEnd1);
-      cellDataList[cellFirstChildIndex + nSubNodes.y + shmem[8+warpIdx]] = leafData;
-    }
-    if (!(level&1))
       for (int i = nBeg1+laneIdx; i < nEnd1; i += WARP_SIZE)
         if (i < nEnd1)
-          ptcl4[i] = buff4[i];
-  }
+        {
+          Particle4<T> pos = buff[i];
+          Particle4<T> vel = ptclVel[pos.get_id()];
+#ifdef PSHFL_SANITY_CHECK
+          pos.mass() = T(pos.get_id());
+#else
+          pos.mass() = vel.mass();
 #endif
+          buff[i] = pos;
+          ptcl[i] = vel;
+        }
+    }
+
+  }
 
 }
 
@@ -609,7 +530,6 @@ static __global__ void buildOctant(
     Box<T> box,
     const int cellParentIndex,
     const int cellIndexBase,
-    CellData *cellDataList,
     const int octantMask,
     __out int *octCounterBase,
     Particle4<T> *ptcl,
@@ -649,12 +569,8 @@ static __global__ void buildOctant(
   /* countes number of particles in each octant of a child octant */
   int nChildren[8] = {0};
 
-  /* just pointer casting to allow vector load/stores, currently works only in single precision */
-  T4* ptcl4 = (T4*)ptcl;
-  T4* buff4=  (T4*)buff;
-
   /* share storage for partiles */
-  __shared__ T4 dataX[8*WARP_SIZE];
+  __shared__ Particle4<T> dataX[8*WARP_SIZE];
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
@@ -665,7 +581,7 @@ static __global__ void buildOctant(
 #endif
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
-    dataX[threadIdx.x] = ptcl4[min(i + threadIdx.x, nEnd-1)];
+    dataX[threadIdx.x] = ptcl[min(i + threadIdx.x, nEnd-1)];
     __syncthreads(); 
 #pragma unroll
     for (int k = 0; k < 8; k++)  /* process particles in shared memory */
@@ -675,7 +591,9 @@ static __global__ void buildOctant(
       const int  addr = i + locid;
       const bool mask = addr < nEnd;
 
-      const T4 p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
+      Particle4<T> p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
+      if (level == 0)
+        p4.set_id(addr);
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -695,7 +613,7 @@ static __global__ void buildOctant(
 #endif
 
       /* use prefix sums to compute offset to where scatter particles */
-      const Position<T> pos(p4.x,p4.y,p4.z);
+      const Position<T> pos(p4.x(),p4.y(),p4.z());
       const int     use = mask && (Octant(box.centre, pos) == warpIdx);
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
@@ -710,7 +628,7 @@ static __global__ void buildOctant(
 
         if (use)
         {
-          buff4[addrB+offset.x] = p4;         /* float4 vector stores   */
+          buff[addrB+offset.x] = p4;         /* float4 vector stores   */
           const int subOctant = Octant(childBox.centre, pos);
 
           switch(subOctant)  /* this way helps to unroll the nChildren into registers */
@@ -906,13 +824,13 @@ static __global__ void buildOctant(
       {
         grid.x = 1;
         buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
       else
       {
         buildOctant<NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex, cellDataList,
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
     }
@@ -933,9 +851,37 @@ static __global__ void buildOctant(
       cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
     }
     if (!(level&1))
+    {
       for (int i = nBeg1+laneIdx; i < nEnd1; i += WARP_SIZE)
         if (i < nEnd1)
-          ptcl4[i] = buff4[i];
+        {
+          Particle4<T> pos = buff[i];
+          Particle4<T> vel = ptclVel[pos.get_id()];
+#ifdef PSHFL_SANITY_CHECK
+          pos.mass() = T(pos.get_id());
+#else
+          pos.mass() = vel.mass();
+#endif
+          ptcl[i] = pos;
+          buff[i] = vel;
+        }
+    }
+    else
+    {
+      for (int i = nBeg1+laneIdx; i < nEnd1; i += WARP_SIZE)
+        if (i < nEnd1)
+        {
+          Particle4<T> pos = buff[i];
+          Particle4<T> vel = ptclVel[pos.get_id()];
+#ifdef PSHFL_SANITY_CHECK
+          pos.mass() = T(pos.get_id());
+#else
+          pos.mass() = vel.mass();
+#endif
+          buff[i] = pos;
+          ptcl[i] = vel;
+        }
+    }
   }
 }
 
@@ -1305,9 +1251,12 @@ static __global__ void buildOctree(
     int *stack_memory_pool,
     Particle4<T> *ptcl,
     Particle4<T> *buff,
-    Particle4<T> *ptclVel,
+    Particle4<T> *d_ptclVel,
     int *ncells_return = NULL)
 {
+  cellDataList = d_cellDataList;
+  ptclVel      = d_ptclVel;
+
   memPool = stack_memory_pool;
   printf("n=          %d\n", n);
   printf("d_node_max= %d\n", d_node_max);
@@ -1366,7 +1315,7 @@ static __global__ void buildOctree(
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
   buildOctant<NLEAF,T><<<grid, block,0,stream>>>
-    (*domain, 0, 0, d_cellDataList, 0, octCounterN, ptcl, buff);
+    (*domain, 0, 0, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
 
   printf(" nptcl  = %d\n", n);
@@ -1408,23 +1357,34 @@ void testTree(const int n, const unsigned int seed)
     h_ptclPos[i].x()    = data. pos[i].x;
     h_ptclPos[i].y()    = data. pos[i].y;
     h_ptclPos[i].z()    = data. pos[i].z;
-    h_ptclPos[i].mass() = data.mass[i];
     h_ptclVel[i].x()    = data. vel[i].x;
     h_ptclVel[i].y()    = data. vel[i].y;
     h_ptclVel[i].z()    = data. vel[i].z;
-//    h_ptclVel[i].id()   = data.mass[i];
+    h_ptclVel[i].mass() = i; //data.mass[i];
+#ifdef PSHFL_SANITY_CHECK
+    h_ptclPos[i].mass() = i;
+    h_ptclVel[i].mass() = i;
+#else
+    h_ptclVel[i].mass() = data.mass[i];
+    h_ptclPos[i].mass() = data.mass[i];
+#endif
   }
 #else
   for (int i = 0; i < n; i++)
   {
-    h_ptclPos[i].mass() = 1.0/n;
     h_ptclPos[i].x()    = drand48();
     h_ptclPos[i].y()    = drand48();
     h_ptclPos[i].z()    = drand48();
     h_ptclVel[i].x()    = 0.0;
     h_ptclVel[i].y()    = 0.0;
     h_ptclVel[i].z()    = 0.0;
-    h_ptclVel[i].id()   = i;
+#ifdef PSHFL_SANITY_CHECK
+    h_ptclPos[i].mass() = i;
+    h_ptclVel[i].mass() = i;
+#else
+    h_ptclVel[i].mass() = 1.0/T(n);
+    h_ptclPos[i].mass() = 1.0/T(n);
+#endif
   }
 #endif
 
@@ -1495,7 +1455,19 @@ void testTree(const int n, const unsigned int seed)
     const double t1 = rtc();
     const double dt = t1 - t0;
     fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, n/1e6/dt);
+    std::swap(d_ptclPos_tmp.ptr, d_ptclVel.ptr);
   }
+
+
+#ifdef PSHFL_SANITY_CHECK
+  {
+    d_ptclPos.d2h(h_ptclPos);
+    d_ptclVel.d2h(h_ptclVel);
+    for (int i = 0; i < n; i++)
+      assert(h_ptclPos[i].mass() == h_ptclVel[i].mass());
+  }
+#endif
+
 
   /******** now particles are sorted, build tree again ******/
 

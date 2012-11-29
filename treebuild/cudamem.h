@@ -44,6 +44,7 @@ struct cuda_mem
   {
     return ptr;
   }
+  T* d() {return ptr;}
   operator const T* () const
   {
     return ptr;
