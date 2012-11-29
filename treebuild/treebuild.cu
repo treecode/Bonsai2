@@ -525,7 +525,7 @@ static __global__ void buildOctantSingle(
 
 /****** this is the main functions that build the tree recursively *******/
 
-template<int NLEAF, typename T>
+template<int NLEAF, typename T, bool STOREIDX>
 static __global__ void buildOctant(
     Box<T> box,
     const int cellParentIndex,
@@ -592,7 +592,7 @@ static __global__ void buildOctant(
       const bool mask = addr < nEnd;
 
       Particle4<T> p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
-      if (level == 0)
+      if (STOREIDX)
         p4.set_id(addr);
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
@@ -829,7 +829,7 @@ static __global__ void buildOctant(
       }
       else
       {
-        buildOctant<NLEAF,T><<<grid,block,0,stream>>>
+        buildOctant<NLEAF,T,false><<<grid,block,0,stream>>>
           (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
@@ -1314,7 +1314,7 @@ static __global__ void buildOctree(
   computeGridAndBlockSize(grid, block, n);
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-  buildOctant<NLEAF,T><<<grid, block,0,stream>>>
+  buildOctant<NLEAF,T,true><<<grid, block,0,stream>>>
     (*domain, 0, 0, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
 
@@ -1436,7 +1436,8 @@ void testTree(const int n, const unsigned int seed)
 
   /* prefer shared memory for kernels */
 
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>, cudaFuncCachePreferShared));
 
   /**** launch tree building kernel ****/
