@@ -65,7 +65,7 @@ struct Particle4
 {
   typedef typename int_type<T>::type intx;
   private:
-#if 0
+#if 0  /* fails with CUDA 5.0 */
   union
   {
     typename vec<4,T>::type packed_data;
