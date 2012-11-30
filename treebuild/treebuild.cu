@@ -394,7 +394,7 @@ static __global__ void buildOctantSingle(
   }
 
   /* writing linking info, parent, child and particle's list */
-  const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
+  const int nChildrenCell = warpBinReduce(npCell > 0);
   if (threadIdx.x == 0 && nChildrenCell > 0)
   {
     const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
@@ -749,7 +749,7 @@ static __global__ void buildOctant(
   }
 
   /* writing linking info, parent, child and particle's list */
-  const int nChildrenCell = warpBinReduce(laneIdx < 8 ? shmem[laneIdx] > 0 : false);
+  const int nChildrenCell = warpBinReduce(npCell > 0);
   if (threadIdx.x == 0 && nChildrenCell > 0)
   {
     const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
