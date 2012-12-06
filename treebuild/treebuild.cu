@@ -242,7 +242,7 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
 }
 
 
-template<int NLEAF, typename T>
+template<int NPERT, int NLEAF, typename T>
 static __global__ void buildOctantSingle(
     Box<T> box,
     const int cellParentIndex,
@@ -278,63 +278,73 @@ static __global__ void buildOctantSingle(
 
   assert(blockIdx.x == 0);
 
+  const int BLOCKDIM = 8*WARP_SIZE;
   __shared__ Particle4<T> dataX[8*WARP_SIZE];
 
   /* process particle array */
-  dataX[threadIdx.x] = ptcl[min(nBeg + threadIdx.x, nEnd-1)];
-  __syncthreads(); 
+  Particle4<T> p4list[NPERT];
+#pragma unroll
+  for (int kk = 0; kk < NPERT; kk++)
+    p4list[kk] = ptcl[min(nBeg + kk*BLOCKDIM+threadIdx.x,nEnd-1)];
 
 #pragma unroll
-  for (int k = 0; k < 8; k++)  /* process particles in shared memory */
+  for (int kk = 0; kk < NPERT; kk++)
   {
-    if (nBeg + (k<<WARP_SIZE2) >= nEnd) break;
-    const int locid = (k<<WARP_SIZE2) + laneIdx;
-    const int  addr = nBeg + locid;
-    const bool mask = addr < nEnd;
+    dataX[threadIdx.x] = p4list[kk];
+    __syncthreads(); 
 
-    const Particle4<T> p4 = dataX[locid];
+#pragma unroll
+    for (int k = 0; k < 8; k++)  /* process particles in shared memory */
+    {
+      if (nBeg + (k<<WARP_SIZE2) + kk * BLOCKDIM >= nEnd) break;
+      const int locid = (k<<WARP_SIZE2) + laneIdx;
+      const int  addr = nBeg + + kk * BLOCKDIM + locid;
+      const bool mask = addr < nEnd;
+
+      const Particle4<T> p4 = dataX[locid];
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
-    { 
-      if (box.centre.x - box.hsize > p4.x ||
-          box.centre.y - box.hsize > p4.y ||
-          box.centre.z - box.hsize > p4.z ||
-          box.centre.x + box.hsize < p4.x ||
-          box.centre.y + box.hsize < p4.y ||
-          box.centre.z + box.hsize < p4.z)
-      {
-        printf("CELL, level= %d  pos= %g %g %g   c= %g %g %g  hsize= %g\n", level,
-            p4.x, p4.y,p4.z,
-            box.centre.x, box.centre.y, box.centre.z, box.hsize);
-        assert(0);
+      { 
+        if (box.centre.x - box.hsize > p4.x ||
+            box.centre.y - box.hsize > p4.y ||
+            box.centre.z - box.hsize > p4.z ||
+            box.centre.x + box.hsize < p4.x ||
+            box.centre.y + box.hsize < p4.y ||
+            box.centre.z + box.hsize < p4.z)
+        {
+          printf("CELL, level= %d  pos= %g %g %g   c= %g %g %g  hsize= %g\n", level,
+              p4.x, p4.y,p4.z,
+              box.centre.x, box.centre.y, box.centre.z, box.hsize);
+          assert(0);
+        }
       }
-    }
 #endif
 
-    /* use prefix sums to compute offset to where scatter particles */
-    const Position<T> pos(p4.x(),p4.y(),p4.z());
-    const int     use = mask && (Octant(box.centre, pos) == warpIdx);
-    const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
+      /* use prefix sums to compute offset to where scatter particles */
+      const Position<T> pos(p4.x(),p4.y(),p4.z());
+      const int     use = mask && (Octant(box.centre, pos) == warpIdx);
+      const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
-    if (offset.y > 0)
-    {
-      const int addrB = cellCounter;
-      cellCounter += offset.y;
-
-      int subOctant = -1;
-      if (use)
+      if (offset.y > 0)
       {
-        buff[addrB+offset.x] = p4;         /* float4 vector stores   */
-        subOctant = Octant(childBox.centre, pos);
-      }
+        const int addrB = cellCounter;
+        cellCounter += offset.y;
+
+        int subOctant = -1;
+        if (use)
+        {
+          buff[addrB+offset.x] = p4;         /* float4 vector stores   */
+          subOctant = Octant(childBox.centre, pos);
+        }
 
 #pragma unroll
-      for (int k = 0; k < 8; k++)
-        nChildren[k] += warpBinReduce(subOctant == k);
+        for (int k = 0; k < 8; k++)
+          nChildren[k] += warpBinReduce(subOctant == k);
+      }
     }
-  }
 
-  __syncthreads();
+    __syncthreads();
+  }
   /* done processing particles, store counts atomically in gmem */
   int (*nPtclChild)[8] = (int (*)[8])dataX;
 
@@ -466,9 +476,30 @@ static __global__ void buildOctantSingle(
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
       grid.x = 1;
-      buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
-        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-         octant_mask, octCounterNbase, buff, ptcl, level+1);
+      if (nCellmax <= block.x)
+      {
+        buildOctantSingle<1,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+      else if (nCellmax <= 2*block.x)
+      {
+        buildOctantSingle<2,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+      else if (nCellmax <= 3*block.x)
+      {
+        buildOctantSingle<3,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+      else 
+      {
+        buildOctantSingle<4,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
     }
   }
 
@@ -823,10 +854,33 @@ static __global__ void buildOctant(
       if (nCellmax <= block.x)
       {
         grid.x = 1;
-        buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
+        buildOctantSingle<1,NLEAF,T><<<grid,block,0,stream>>>
           (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
+#if 0
+      else if (nCellmax <= 2*block.x)
+      {
+        grid.x = 1;
+        buildOctantSingle<2,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+      else if (nCellmax <= 3*block.x)
+      {
+        grid.x = 1;
+        buildOctantSingle<3,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+      else if (nCellmax <= 4*block.x)
+      {
+        grid.x = 1;
+        buildOctantSingle<4,NLEAF,T><<<grid,block,0,stream>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+#endif
       else
       {
         buildOctant<NLEAF,T,false><<<grid,block,0,stream>>>
@@ -1200,7 +1254,7 @@ static __global__ void computeBoundingBox(
   }
 }
 
-template<int NTHREADS, int NBLOCKS, typename T>
+  template<int NTHREADS, int NBLOCKS, typename T>
 static __global__ void computeDomainSize(const int n, const Particle4<T> *ptclPos, Box<T> *domain)
 {
   Position<T> *minmax_ptr = new Position<T>[2*NBLOCKS];
@@ -1314,9 +1368,11 @@ static __global__ void buildOctree(
   computeGridAndBlockSize(grid, block, n);
   cudaStream_t stream;
   cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+#if 1
   buildOctant<NLEAF,T,true><<<grid, block,0,stream>>>
     (*domain, 0, 0, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
+#endif
 
   printf(" nptcl  = %d\n", n);
   printf(" nb_leaf= %d\n", nbodies_leaf);
@@ -1398,7 +1454,7 @@ void testTree(const int n, const unsigned int seed)
 
   d_ptclPos.h2d(h_ptclPos);
   d_ptclVel.h2d(h_ptclVel);
-  
+
   /* compute bounding box */
 
   cuda_mem< Box<T> > d_domain;
@@ -1416,7 +1472,7 @@ void testTree(const int n, const unsigned int seed)
   }
 
   /****** build tree *****/
-  
+
   /* allocate memory for the stack nodes */
 
   const int node_max = n/10;
@@ -1438,7 +1494,12 @@ void testTree(const int n, const unsigned int seed)
 
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>, cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<1,NLEAF,T>, cudaFuncCachePreferShared));
+#if 0
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<2,NLEAF,T>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<3,NLEAF,T>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<4,NLEAF,T>, cudaFuncCachePreferShared));
+#endif
 
   /**** launch tree building kernel ****/
 
