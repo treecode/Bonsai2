@@ -901,7 +901,7 @@ static __global__ void buildOctant(
       assert(nEnd1 - nBeg1 <= NLEAF);
       atomicAdd(&nleaves,1);
       atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
-      const CellData leafData(cellIndexBase+blockIdx.y, nBeg, nEnd1);
+      const CellData leafData(cellIndexBase+blockIdx.y, nBeg1, nEnd1);
       cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
     }
     if (!(level&1))
