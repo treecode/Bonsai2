@@ -181,33 +181,25 @@ static __global__ void testSortKernel(const int n, uint *input, uint *output)
   __shared__ int sortbuf[65]; //2*32 + 1, +1 for value exchange
 
   //Put the to be sorted values into shared memory
-  uint value = (tid << IDSHIFT) | input[idx];
-  __syncthreads();
+  const int val = input[idx];
+ 
+  int2 histogram;     //x will contain the offset within the warp
+                      //y will contain the total sum of the warp
 
-  //Histogram count, first each warp makes a local histogram
-
-  //int2 histogram[2]; //x will contain the offset within the warp
-  int2 histogram;
-                     //y will contain the total sum of the warp
-                     //Index 0, is not used only to prevent if
-                     //Index 1, contains the result for the threads value
-
-  const int val = (value & 0x0000000F);
-  int2 scanRes;
   //Count per radix the offset and number of values
   #pragma unroll
   for(int i=0; i < 8; i++)
   {
-    scanRes = warpBinExclusiveScan((val == i));
+    int2 scanRes = warpBinExclusiveScan((val == i));
 
-    if(laneIdx == i) //Lane 0 to 8, directly write the scan sum to shared-mem
+    if(laneIdx == i) //Lane 0 to 8 directly write the scan sum to shared-mem
     {
       sortbuf[laneIdx*8+warpIdx] = scanRes.y;
     }
-    if(val == i)
-      histogram = scanRes; //Index 1 contains the correct value
+    if(val == i) histogram = scanRes; 
   }
-  __syncthreads();
+  __syncthreads(); //Let the writes to sortbuf be complete for all 8 warps
+
   //Now compute the prefix sums across our warps
   //note that we have 8 values by 8 histogram values
   //store this 8x8 into 64 lanes.
@@ -215,11 +207,7 @@ static __global__ void testSortKernel(const int n, uint *input, uint *output)
   //this allows us to compute the prefix sum using two warps
 
 
-  //Compute the exclusive prefix sum, using binary reduction
-  //            0, 1, 2, 3, 4, 5, 6, 7
-  //            0 + 1, 2+3, 4+5, 6+7
-  //              A  + B  ,  C  + D
-  //                 E    +    F
+  //Compute the exclusive prefix sum, using binary reduction / shuffles
   int offset;
   if(warpIdx < 2)
   {
@@ -236,28 +224,31 @@ static __global__ void testSortKernel(const int n, uint *input, uint *output)
   }
   __syncthreads(); //Wait on sortbuf[64] to be stored
 
-  if(warpIdx == 1)
-  {
-    offset+=sortbuf[64];
-  }
+  if(warpIdx == 1) offset+=sortbuf[64]; //Complete cross-warp prefix-sum
   
-  //Prefix sum is done, write out the results
-  if(warpIdx < 2)
-  {
-    sortbuf[laneIdx+WARP_SIZE*warpIdx] = offset;
-  }
+  //Prefix sum complete, write out the results
+  if(warpIdx < 2) sortbuf[laneIdx+WARP_SIZE*warpIdx] = offset;
+
   __syncthreads();
   
   //Now each thread reads their storage location in the following way:
   //Value to read is one of the eight bins, namely the one associated to
-  //the value and also is offset by the warp
-  
-   //val*8 + warpIdx
-   //int storeLocation = sortbuf[val*8 + warpIdx] + histogram[1].x; //per warp offset+in-warp offset
-   int storeLocation = sortbuf[val*8 + warpIdx] + histogram.x; //per warp offset+in-warp offset
+  //the value and the is offset by the warp. This is then increased with 
+  //the offset within the current warp as computed using shfl_scan_add_step 
+  int storeLocation = sortbuf[val*8 + warpIdx] + histogram.x; 
 
-   //Coalesced output
-   output[bid*blockDim.x+storeLocation] = value;
+  #if 1
+    __shared__ int valbuf[256]; //2*32 + 1, +1 for value exchange
+    //Scatter in shared-mem and then coalesced output to gmem
+    valbuf[storeLocation] =  (tid << IDSHIFT) | val; //Use for CPU/GPU comparison
+    //valbuf[storeLocation] =  val; //Use for production
+    __syncthreads();
+    output[bid*blockDim.x+tid] = valbuf[tid];
+  #else
+    //Scattered output to gmem
+    output[bid*blockDim.x+storeLocation] = (tid << IDSHIFT) | val; //Use for CPU/GPU comparison
+    //output[bid*blockDim.x+storeLocation] = val; //Production
+  #endif
 }
 
 
@@ -345,13 +336,18 @@ int main(int argc, char * argv [])
       matchIDCount  += match_id;
       if(match_id && match_val) matchCount++;
 
-   /*
+   
       if(match_id == 0 || match_val == 0)
         fprintf(stderr, "Index: %d Error GPU: (%d, %d)\tCPU: (%d, %d)  Match-ID: %d  Match-val: %d \n",
                         i, val, id, hval, hid, match_id, match_val);
-  */
+  
     }
   }
+
+  if(matchValCount == n)
+    fprintf(stdout, "SUCCESS \n");
+  else
+    fprintf(stdout, "FAILED  \n");
 
   fprintf(stdout,"Total items: %d  Match-full: %d Match-val: %d Match-id: %d \n", 
                   n, matchCount, matchValCount, matchIDCount);
