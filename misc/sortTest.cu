@@ -51,13 +51,14 @@ void kernelSuccess(const char kernel[] = "kernel")
   }
 }
 
-#define PRINT_STATS
+//#define PRINT_STATS
 
 //Basic bitonic sort, taken from the Advanced Quicksort example in the SDK as reference implementation
 static __global__ void testSortKernel_bitonicSDK(const int n, uint *input, uint *output)
 {
   const int tid = threadIdx.x;
   const int bid = blockIdx.x;
+  const int idx = bid*blockDim.x + tid;
 
   #ifdef PRINT_STATS
     int loopCount = 0;
@@ -66,7 +67,7 @@ static __global__ void testSortKernel_bitonicSDK(const int n, uint *input, uint 
 
   __shared__ int sortbuf[256];
 
-  sortbuf[tid] = (tid << IDSHIFT) | input[tid];
+  sortbuf[tid] = (tid << IDSHIFT) | input[idx];
   __syncthreads();
 
 //   bitonicsort_kernel(input, output, 0, n);
@@ -132,7 +133,7 @@ static __global__ void testSortKernel_bitonicSDK(const int n, uint *input, uint 
 
   //Combine the value and the thread-id into the results
 
-   output[tid] = sortbuf[tid];
+   output[idx] = sortbuf[tid];
 }
 
 //Custom sort method
@@ -148,11 +149,11 @@ static __device__ __forceinline__ int2 warpBinExclusiveScan(const bool p)
   return make_int2(__popc(b & lanemask_lt()), __popc(b));
 }
 
-static __device__ __forceinline__ int warpBinReduce(const bool p)
-{
-  const unsigned int b = __ballot(p);
-  return __popc(b);
-}
+// static __device__ __forceinline__ int warpBinReduce(const bool p)
+// {
+//   const unsigned int b = __ballot(p);
+//   return __popc(b);
+// }
 
 static __device__ __forceinline__ uint shfl_scan_add_step(const uint partial, const uint up_offset)
 {
@@ -172,44 +173,47 @@ static __global__ void testSortKernel(const int n, uint *input, uint *output)
 {
   const int tid = threadIdx.x;
   const int bid = blockIdx.x;
+  const int idx = bid*blockDim.x + tid;
 
   const int laneIdx = threadIdx.x & (WARP_SIZE-1);
   const int warpIdx = threadIdx.x >> WARP_SIZE2;
 
-  __shared__ int sortbuf[256];
+  __shared__ int sortbuf[65]; //2*32 + 1, +1 for value exchange
 
   //Put the to be sorted values into shared memory
-  uint value = (tid << IDSHIFT) | input[tid];
-// sortbuf[tid]
+  uint value = (tid << IDSHIFT) | input[idx];
   __syncthreads();
 
   //Histogram count, first each warp makes a local histogram
-  bool use       = false;
 
-  int2 histogram[8]; //x will contain the offset within the warp
+  //int2 histogram[2]; //x will contain the offset within the warp
+  int2 histogram;
                      //y will contain the total sum of the warp
+                     //Index 0, is not used only to prevent if
+                     //Index 1, contains the result for the threads value
 
   const int val = (value & 0x0000000F);
+  int2 scanRes;
   //Count per radix the offset and number of values
   #pragma unroll
   for(int i=0; i < 8; i++)
-  //for(int i=0; i < 2; i++)
   {
-    use          = ((value & 0x0000000F) == i);
-    histogram[i] = warpBinExclusiveScan(use);
-  }
+    scanRes = warpBinExclusiveScan((val == i));
 
+    if(laneIdx == i) //Lane 0 to 8, directly write the scan sum to shared-mem
+    {
+      sortbuf[laneIdx*8+warpIdx] = scanRes.y;
+    }
+    if(val == i)
+      histogram = scanRes; //Index 1 contains the correct value
+  }
+  __syncthreads();
   //Now compute the prefix sums across our warps
   //note that we have 8 values by 8 histogram values
   //store this 8x8 into 64 lanes.
   //warp0_hist0, warp1_hist0, warp2_hist0, ...warp6_hist7, warp7_hist7
-  //this should allows us to prefix sum using two warps
-  if(laneIdx < 8)
-  {
-    //printf("Test: %d : %d : %d \n", threadIdx.x, histogram[laneIdx].y, laneIdx*8+warpIdx);
-    sortbuf[laneIdx*8+warpIdx] = histogram[laneIdx].y;
-  }
-  __syncthreads();
+  //this allows us to compute the prefix sum using two warps
+
 
   //Compute the exclusive prefix sum, using binary reduction
   //            0, 1, 2, 3, 4, 5, 6, 7
@@ -221,59 +225,53 @@ static __global__ void testSortKernel(const int n, uint *input, uint *output)
   {
     offset =  sortbuf[laneIdx+WARP_SIZE*warpIdx];
     #pragma unroll
-      //for(int i = 0; i < 3; i++) /* log2(8) steps */
       for(int i = 0; i < 5; i++) /* log2(32) steps */
-          offset = shfl_scan_add_step(offset, 1 << i);
+        offset = shfl_scan_add_step(offset, 1 << i);
 
+    //Now we have two warps with prefix sums, we need to add the final value
+    //of the first warp to the values of the second warp. Use the unused location
+    if(threadIdx.x==31) sortbuf[64] = offset;
 
-    //sortbuf[laneIdx+WARP_SIZE*warpIdx] = offset;
-   //Now we have two warps with prefix sums, we need to add the final value
-   //of first warp to the values of the second warp
-
-   if(threadIdx.x==31) sortbuf[64] = offset;
-
-   offset -= sortbuf[laneIdx+WARP_SIZE*warpIdx]; //Make exclusive
-
-//     printf("[%d, %d , %d ]\t offset: %d %d \n", bid, tid, 
-// 		    laneIdx+WARP_SIZE*warpIdx,  sortbuf[laneIdx+WARP_SIZE*warpIdx],offset);
+    offset -= sortbuf[laneIdx+WARP_SIZE*warpIdx]; //Make exclusive
   }
-  __syncthreads();
+  __syncthreads(); //Wait on sortbuf[64] to be stored
 
   if(warpIdx == 1)
   {
     offset+=sortbuf[64];
-//     printf("[%d, %d , %d ]\t offset2: %d %d \n", bid, tid, 
-// 		    laneIdx+WARP_SIZE*warpIdx,  sortbuf[laneIdx+WARP_SIZE*warpIdx],offset);
   }
   
+  //Prefix sum is done, write out the results
   if(warpIdx < 2)
   {
     sortbuf[laneIdx+WARP_SIZE*warpIdx] = offset;
-//    printf("[%d, %d , %d ]\t offset2: %d %d \n", bid, tid, 
-//                 laneIdx+WARP_SIZE*warpIdx,  sortbuf[laneIdx+WARP_SIZE*warpIdx],offset);
   }
   __syncthreads();
-
+  
   //Now each thread reads their storage location in the following way:
-  //Value to read is one of the eight bins and depends on the warp
+  //Value to read is one of the eight bins, namely the one associated to
+  //the value and also is offset by the warp
   
    //val*8 + warpIdx
-   int storeLocation = sortbuf[val*8 + warpIdx] + histogram[val].x;
+   //int storeLocation = sortbuf[val*8 + warpIdx] + histogram[1].x; //per warp offset+in-warp offset
+   int storeLocation = sortbuf[val*8 + warpIdx] + histogram.x; //per warp offset+in-warp offset
 
-
-   output[storeLocation] = value;
-
-//    printf("[%d, %d ]\t input[tid]: %d histo: %d sortbuf: %d  storeLoc: %d \n",
-//           bid, tid,  input[tid], histogram[val].x, sortbuf[val*8 + warpIdx], 
-// 	  storeLocation);
-
+   //Coalesced output
+   output[bid*blockDim.x+storeLocation] = value;
 }
 
 
 
 int main(int argc, char * argv [])
 {
-  const int n = 256;
+  const int nPerThread = 256;
+  int nBlocks          = 1024;
+  
+
+  if(argc > 1)
+    nBlocks = atoi(argv[1]);
+
+  const int n = nPerThread*nBlocks;
 
   host_mem<uint> h_input, h_output, h_check;
   h_input.alloc(n);
@@ -294,67 +292,72 @@ int main(int argc, char * argv [])
   }
 
   for(int i=0; i < 8; i++)
-	  fprintf(stderr,"Data-stats: %d\t%d\n",
+	  fprintf(stdout,"Data-stats: %d\t%d\n",
 			  i, histoCount[i]);
 
   d_input.h2d(h_input);
 
   //Call the sort kernel
-  const int NBLOCKS  = 1;
-  const int NTHREADS = 256;
+  const int NBLOCKS  = nBlocks;
+  const int NTHREADS = nPerThread; //Should be 256!!
 
-//   testSortKernel_bitonicSDK<<<NBLOCKS,NTHREADS>>>(n, d_input, d_output);
-//   kernelSuccess("testSortKernel_bitonicSDK");
-
+  double t0 = rtc();
+  testSortKernel_bitonicSDK<<<NBLOCKS,NTHREADS>>>(n, d_input, d_output);
+  kernelSuccess("testSortKernel_bitonicSDK");
+  double t1 = rtc();
   testSortKernel<<<NBLOCKS,NTHREADS>>>(n, d_input, d_output);
   kernelSuccess("testSortKernel");
+  double t2 = rtc();
   d_output.d2h(h_output);
 
 
-
-//   exit(0);
   //Compute result on the host
-  hostSortTest(h_input, h_check, n);
+  double t3 = rtc();
+  for(int i=0; i < n; i+=256)
+  {
+    hostSortTest(h_input+i, h_check+i, 256);
+  }
+  double t4 = rtc();
 
   const int printStride = 1;
+  int matchCount = 0;
+  int matchValCount = 0;
+  int matchIDCount  = 0;
   for(int i=0; i < n; i+=printStride)
   {
-    for(int j=0; j < printStride; j++)
+    if(i < n)
     {
-      if(i+j < NTHREADS)
-      {
-        //Extract id and value
-        uint id  = h_output[i+j] >> IDSHIFT;
-        int val  = h_output[i+j] & VALMASK;
+      //Extract id and value
+      uint id  = h_output[i] >> IDSHIFT;
+      int val  = h_output[i] & VALMASK;
 
-        uint hid  = h_check[i] >> IDSHIFT;
-        int hval  = h_check[i] & VALMASK;
+      uint hid  = h_check[i] >> IDSHIFT;
+      int hval  = h_check[i] & VALMASK;
 
-        int match_id = 0;
-        int match_val= 0;
-        if(id == hid)
-          match_id = 1;
-        if(val == hval)
-          match_val = 1;
+      int match_id = 0;
+      int match_val= 0;
+      if(id == hid)
+        match_id = 1;
+      if(val == hval)
+        match_val = 1;
+    
+      matchValCount += match_val;
+      matchIDCount  += match_id;
+      if(match_id && match_val) matchCount++;
 
-        //fprintf(stderr, "(%d, %d)\t\t", val, id);
-        fprintf(stderr, "GPU: (%d, %d)\tCPU: (%d, %d)  Match-ID: %d  Match-val: %d",
-                         val, id, hval, hid, match_id, match_val);
-
-      }
+   /*
+      if(match_id == 0 || match_val == 0)
+        fprintf(stderr, "Index: %d Error GPU: (%d, %d)\tCPU: (%d, %d)  Match-ID: %d  Match-val: %d \n",
+                        i, val, id, hval, hid, match_id, match_val);
+  */
     }
-    fprintf(stderr, "\n");
   }
 
-
-  //Compare the host and device results
-  for(int i=0; i < n; i++)
-  {
-    //Extract id and value
-    uint id  = h_check[i] >> IDSHIFT;
-    int val  = h_check[i] & VALMASK;
-
- //   fprintf(stderr, "%d\t->\t%d  |  %d \n", i, val, id);
-  }
+  fprintf(stdout,"Total items: %d  Match-full: %d Match-val: %d Match-id: %d \n", 
+                  n, matchCount, matchValCount, matchIDCount);
+  fprintf(stdout,"Time host: %lg  Time bitonic: %lg   Time-radix: %lg \n", 
+                  t4-t3, t1-t0, t2-t1);
+  fprintf(stdout,"Time-radix: %lg %f MPtcl/s\n", 
+                  t2-t1,  ((1/(t2-t1))*n)/1000000);
 
 }
