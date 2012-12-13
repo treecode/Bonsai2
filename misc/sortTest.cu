@@ -8,6 +8,7 @@
 #include "../treebuild/cudamem.h"
 
 //Compile: nvcc -O3 -o sortTest  sortTest.cu -arch=sm_30 -Xptxas=-v
+//Compile: nvcc -O3 -o sortTest  sortTest.cu -arch=sm_35 -Xptxas=-v
 
 #define IDSHIFT 24
 #define VALMASK 0x0000000F
@@ -251,7 +252,176 @@ static __global__ void testSortKernel(const int n, uint *input, uint *output)
   #endif
 }
 
+static __global__ void testSortKernelAtomic(const int n, uint *input, uint *output)
+{
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+  const int idx = bid*blockDim.x + tid;
 
+  const int laneIdx = threadIdx.x & (WARP_SIZE-1);
+  const int warpIdx = threadIdx.x >> WARP_SIZE2;
+
+  __shared__ int sortbuf[256]; //2*32 + 1, +1 for value exchange
+  sortbuf[tid] = 0;
+  __syncthreads();
+
+  //Put the to be sorted values into shared memory
+  const int val = input[idx];
+ 
+  int2 histogram;     //x will contain the offset within the warp
+                      //y will contain the total sum of the warp
+
+  //Count per radix the offset and number of values
+  #pragma unroll
+  for(int i=0; i < 8; i++)
+  {
+    int2 scanRes = warpBinExclusiveScan((val == i));
+
+    if(laneIdx == i) //Lane 0 to 8 directly write the scan sum to shared-mem
+    {
+      sortbuf[laneIdx*8+warpIdx] = scanRes.y;
+      
+      //Sum values of 0-4, 4*8 atomic ops...
+      if(i < 4) atomicAdd(&sortbuf[65],scanRes.y);
+      
+    }
+    if(val == i) histogram = scanRes; 
+  }
+  __syncthreads(); //Let the writes to sortbuf be complete for all 8 warps
+
+  //Now compute the prefix sums across our warps
+  //note that we have 8 values by 8 histogram values
+  //store this 8x8 into 64 lanes.
+  //warp0_hist0, warp1_hist0, warp2_hist0, ...warp6_hist7, warp7_hist7
+  //this allows us to compute the prefix sum using two warps
+
+
+  //Compute the exclusive prefix sum, using binary reduction / shuffles
+  int offset;
+  if(warpIdx < 2)
+  {
+    offset =  sortbuf[laneIdx+WARP_SIZE*warpIdx];    
+    #pragma unroll
+      for(int i = 0; i < 5; i++) /* log2(32) steps */
+        offset = shfl_scan_add_step(offset, 1 << i);
+   
+    //Now we have two warps with prefix sums, we need to add the final value
+    //of the first warp to the values of the second warp. Use the unused location
+
+    offset -= sortbuf[laneIdx+WARP_SIZE*warpIdx]; //Make exclusive
+    offset += sortbuf[64+warpIdx];                //Sum of other warp ( based on atomic)
+
+    sortbuf[laneIdx+WARP_SIZE*warpIdx] = offset;
+  }
+  __syncthreads(); //Wait on sortbuf[64] to be stored
+  
+  //Now each thread reads their storage location in the following way:
+  //Value to read is one of the eight bins, namely the one associated to
+  //the value and the is offset by the warp. This is then increased with 
+  //the offset within the current warp as computed using shfl_scan_add_step 
+  int storeLocation = sortbuf[val*8 + warpIdx] + histogram.x; 
+
+  #if 1
+    __shared__ int valbuf[256]; //2*32 + 1, +1 for value exchange
+    //Scatter in shared-mem and then coalesced output to gmem
+    valbuf[storeLocation] =  (tid << IDSHIFT) | val; //Use for CPU/GPU comparison
+    //valbuf[storeLocation] =  val; //Use for production
+    __syncthreads();
+    output[bid*blockDim.x+tid] = valbuf[tid];
+  #else
+    //Scattered output to gmem
+    output[bid*blockDim.x+storeLocation] = (tid << IDSHIFT) | val; //Use for CPU/GPU comparison
+    //output[bid*blockDim.x+storeLocation] = val; //Production
+  #endif
+}
+
+static __global__ void testSortKernel1WarpPrefix(const int n, uint *input, uint *output)
+{
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+  const int idx = bid*blockDim.x + tid;
+
+  const int laneIdx = threadIdx.x & (WARP_SIZE-1);
+  const int warpIdx = threadIdx.x >> WARP_SIZE2;
+
+  __shared__ int sortbuf[64]; //2*32 + 1, +1 for value exchange
+
+  //Put the to be sorted values into shared memory
+  const int val = input[idx];
+ 
+  int2 histogram;     //x will contain the offset within the warp
+                      //y will contain the total sum of the warp
+
+  //Count per radix the offset and number of values
+  #pragma unroll
+  for(int i=0; i < 8; i++)
+  {
+    int2 scanRes = warpBinExclusiveScan((val == i));
+
+    if(laneIdx == i) //Lane 0 to 8 directly write the scan sum to shared-mem
+    {
+      sortbuf[laneIdx*8+warpIdx] = scanRes.y;
+    }
+    if(val == i) histogram = scanRes; 
+  }
+  __syncthreads(); //Let the writes to sortbuf be complete for all 8 warps
+
+  //Now compute the prefix sums across our warps
+  //note that we have 8 values by 8 histogram values
+  //store this 8x8 into 64 lanes.
+  //warp0_hist0, warp1_hist0, warp2_hist0, ...warp6_hist7, warp7_hist7
+  //this allows us to compute the prefix sum using two warps
+
+
+  //Compute the exclusive prefix sum, using binary reduction / shuffles
+  if(warpIdx == 0) //Only warp 0 does this, this elimintas _syncthreads in between
+  {
+    int offset1 =  sortbuf[laneIdx+WARP_SIZE*0];
+    int offset2 =  sortbuf[laneIdx+WARP_SIZE*1];
+    #pragma unroll
+      for(int i = 0; i < 5; i++) /* log2(32) steps */
+        offset1 = shfl_scan_add_step(offset1, 1 << i);
+
+    //Now we have prefix sums of first half, we need to add the final value
+    //to the second half result. 
+    int bcast = __shfl(offset1,31);
+
+    offset1                     -= sortbuf[laneIdx+WARP_SIZE*0]; //Make exclusive
+    sortbuf[laneIdx+WARP_SIZE*0] = offset1;
+
+    //prefix sum on second half    
+    #pragma unroll
+      for(int i = 0; i < 5; i++) /* log2(32) steps */
+        offset2 = shfl_scan_add_step(offset2, 1 << i);
+    
+    offset2 -= sortbuf[laneIdx+WARP_SIZE*1]; //Make exclusive
+    offset2 += bcast;
+        
+    sortbuf[laneIdx+WARP_SIZE*1] = offset2;
+    
+  }
+  __syncthreads(); //Wait on warp0 to be done
+
+
+  //Now each thread reads their storage location in the following way:
+  //Value to read is one of the eight bins, namely the one associated to
+  //the value and the is offset by the warp. This is then increased with 
+  //the offset within the current warp as computed using shfl_scan_add_step 
+  int storeLocation = sortbuf[val*8 + warpIdx] + histogram.x; 
+
+  #if 1
+    __shared__ int valbuf[256]; //2*32 + 1, +1 for value exchange
+    //Scatter in shared-mem and then coalesced output to gmem
+    valbuf[storeLocation] =  (tid << IDSHIFT) | val; //Use for CPU/GPU comparison
+    //valbuf[storeLocation] =  val; //Use for production
+    __syncthreads();
+    output[bid*blockDim.x+tid] = valbuf[tid];
+  #else
+    //Scattered output to gmem
+    output[bid*blockDim.x+storeLocation] = (tid << IDSHIFT) | val; //Use for CPU/GPU comparison
+    //output[bid*blockDim.x+storeLocation] = val; //Production
+  #endif
+}
 
 int main(int argc, char * argv [])
 {
@@ -299,6 +469,13 @@ int main(int argc, char * argv [])
   testSortKernel<<<NBLOCKS,NTHREADS>>>(n, d_input, d_output);
   kernelSuccess("testSortKernel");
   double t2 = rtc();
+  testSortKernelAtomic<<<NBLOCKS,NTHREADS>>>(n, d_input, d_output);
+  kernelSuccess("testSortKernelAtomic");
+  double t2b = rtc();
+  testSortKernel1WarpPrefix<<<NBLOCKS,NTHREADS>>>(n, d_input, d_output);
+  kernelSuccess("testSortKernel1WarpPrefix");
+  double t2c = rtc();
+
   d_output.d2h(h_output);
 
 
@@ -351,9 +528,13 @@ int main(int argc, char * argv [])
 
   fprintf(stdout,"Total items: %d  Match-full: %d Match-val: %d Match-id: %d \n", 
                   n, matchCount, matchValCount, matchIDCount);
-  fprintf(stdout,"Time host: %lg  Time bitonic: %lg   Time-radix: %lg \n", 
-                  t4-t3, t1-t0, t2-t1);
+  fprintf(stdout,"Time host: %lg  Time bitonic: %lg   Time-radix: %lg Time-radix atomic: %lg Time-radix 1warp: %lg\n", 
+                  t4-t3, t1-t0, t2-t1, t2b-t2, t2c-t2b);
   fprintf(stdout,"Time-radix: %lg %f MPtcl/s\n", 
                   t2-t1,  ((1/(t2-t1))*n)/1000000);
+  fprintf(stdout,"Time-radix-Atomic: %lg %f MPtcl/s\n", 
+                  t2b-t2,  ((1/(t2b-t2))*n)/1000000);
+  fprintf(stdout,"Time-radix-one warp: %lg %f MPtcl/s\n", 
+                  t2c-t2b,  ((1/(t2c-t2b))*n)/1000000);
 
 }
