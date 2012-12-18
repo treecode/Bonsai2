@@ -504,6 +504,12 @@ static __global__ void testSortKernel1WarpPrefixIncludingSum(const int n, uint *
   }
   __syncthreads(); //Wait on warp0 to be done
 
+  //can do atomic here:
+  //if(threadIdx.x == 0)
+  //startOffset = atomicAdd(&loc, numPerOctant[warpIdx]
+  //startOffset =  __shfl(startOffset,0);
+  //Continue :)
+
   //Now each thread reads their storage location in the following way:
   //Value to read is one of the eight bins, namely the one associated to
   //the value and the is offset by the warp. This is then increased with 
