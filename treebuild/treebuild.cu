@@ -83,6 +83,8 @@ struct Particle4
 //  __host__ __device__ intx id() const { return _id; }
   __forceinline__ __device__ int get_idx() const;
   __forceinline__ __device__ int set_idx(const int i);
+  __forceinline__ __device__ int get_oct() const;
+  __forceinline__ __device__ int set_oct(const int oct);
 
   __host__ __device__ T& x    () { return packed_data.x;}
   __host__ __device__ T& y    () { return packed_data.y;}
@@ -108,12 +110,23 @@ __device__ unsigned long long io_words;
 
 template<> __device__ __forceinline__ int Particle4<float>::get_idx() const
 {
-  return __float_as_int(packed_data.w);
+  return (__float_as_int(packed_data.w) >> 4) & 0xF0000000;
 }
-template<> __device__ __forceinline__ int Particle4<float>::set_idx(const int id) 
+template<> __device__ __forceinline__ int Particle4<float>::get_oct() const
 {
-  packed_data.w = __int_as_float(id);
-  return id;
+  return __float_as_int(packed_data.w) & 0xF;
+}
+template<> __device__ __forceinline__ int Particle4<float>::set_idx(const int idx)
+{
+  const int oct = get_oct();
+  packed_data.w = __int_as_float((idx << 4) | oct);
+  return idx;
+}
+template<> __device__ __forceinline__ int Particle4<float>::set_oct(const int oct)
+{
+  const int idx = get_idx();
+  packed_data.w = __int_as_float((idx << 4) | oct);
+  return oct;
 }
 
 template<typename T>
@@ -301,7 +314,7 @@ static __global__ void buildOctantSingle(
       const int  addr = nBeg + + kk * BLOCKDIM + locid;
       const bool mask = addr < nEnd;
 
-      const Particle4<T> p4 = dataX[locid];
+      Particle4<T> p4 = dataX[locid];
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -321,8 +334,7 @@ static __global__ void buildOctantSingle(
 #endif
 
       /* use prefix sums to compute offset to where scatter particles */
-      const Position<T> pos(p4.x(),p4.y(),p4.z());
-      const int     use = mask && (Octant(box.centre, pos) == warpIdx);
+      const int     use = mask && (p4.get_oct() == warpIdx);
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
       if (offset.y > 0)
@@ -333,8 +345,10 @@ static __global__ void buildOctantSingle(
         int subOctant = -1;
         if (use)
         {
-          buff[addrB+offset.x] = p4;         /* float4 vector stores   */
+          const Position<T> pos(p4.x(),p4.y(),p4.z());
           subOctant = Octant(childBox.centre, pos);
+          p4.set_oct(subOctant);
+          buff[addrB+offset.x] = p4;         /* float4 vector stores   */
         }
 
 #pragma unroll
@@ -593,9 +607,9 @@ static __global__ void buildOctant(
    * of the cell */
   if (level > 0)
     box = ChildBox(box, octant2process);
+  const Box<T> childBox = ChildBox(box, warpIdx);
 
   /* compute children boxes of this cell */
-  const Box<T> childBox = ChildBox(box, warpIdx);
 
   /* countes number of particles in each octant of a child octant */
   int nChildren[8] = {0};
@@ -615,16 +629,14 @@ static __global__ void buildOctant(
     dataX[threadIdx.x] = ptcl[min(i + threadIdx.x, nEnd-1)];
     __syncthreads(); 
 #pragma unroll
-    for (int k = 0; k < 8; k++)  /* process particles in shared memory */
+    for (int kk = 0; kk < 8*WARP_SIZE; kk += WARP_SIZE)  /* process particles in shared memory */
     {
-      if (i + (k<<WARP_SIZE2) >= nEnd) break;
-      const int locid = (k<<WARP_SIZE2) + laneIdx;
-      const int  addr = i + locid;
+      if (i + kk >= nEnd) break;
+      const int locid = kk + laneIdx;
+      const int  addr =  i + locid;
       const bool mask = addr < nEnd;
 
       Particle4<T> p4 = dataX[locid]; //ptcl4[mask ? i+locid : nEnd-1];  /* float4 vector loads */
-      if (STOREIDX)
-        p4.set_idx(addr);
 
 #if 0          /* sanity check, check on the fly that tree structure is corrent */
       { 
@@ -644,8 +656,17 @@ static __global__ void buildOctant(
 #endif
 
       /* use prefix sums to compute offset to where scatter particles */
-      const Position<T> pos(p4.x(),p4.y(),p4.z());
-      const int     use = mask && (Octant(box.centre, pos) == warpIdx);
+      int use = 0;
+      if (STOREIDX)
+      {
+        p4.set_idx(addr);
+        const Position<T> pos(p4.x(),p4.y(),p4.z());
+        use = mask && (Octant(box.centre, pos) == warpIdx);
+      }
+      else
+      {
+        use = mask && (p4.get_oct() == warpIdx);
+      }
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
 
       /* if this warp/octant gets particles, then write them into memory */
@@ -659,20 +680,19 @@ static __global__ void buildOctant(
 
         if (use)
         {
-          buff[addrB+offset.x] = p4;         /* float4 vector stores   */
+          const Position<T> pos(p4.x(),p4.y(),p4.z());
           const int subOctant = Octant(childBox.centre, pos);
+          p4.set_oct(subOctant);
+          buff[addrB+offset.x] = p4;         /* float4 vector stores   */
 
-          switch(subOctant)  /* this way helps to unroll the nChildren into registers */
-          {
-            case 0: nChildren[0]++; break;
-            case 1: nChildren[1]++; break;
-            case 2: nChildren[2]++; break;
-            case 3: nChildren[3]++; break;
-            case 4: nChildren[4]++; break;
-            case 5: nChildren[5]++; break;
-            case 6: nChildren[6]++; break;
-            case 7: nChildren[7]++; break;
-          };
+          nChildren[0] += (0 == subOctant);
+          nChildren[1] += (1 == subOctant);
+          nChildren[2] += (2 == subOctant);
+          nChildren[3] += (3 == subOctant);
+          nChildren[4] += (4 == subOctant);
+          nChildren[5] += (5 == subOctant);
+          nChildren[6] += (6 == subOctant);
+          nChildren[7] += (7 == subOctant);
         }
       }
     }
