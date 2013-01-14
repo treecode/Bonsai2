@@ -9,3 +9,9 @@ double precision:
 nvcc -O3 -o treebuild  treebuild.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=48 -DFP64
 
 
+to try out scan-based kernel (slower) do this:
+nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=32  -DNWARPS_OCTREE2=3  
+or
+nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=32  -DNWARPS_OCTREE2=4
+or
+nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=32  -DNWARPS_OCTREE2=5

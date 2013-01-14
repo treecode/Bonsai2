@@ -8,6 +8,10 @@
 
 #define __out 
 
+#ifndef NWARPS_OCTREE2
+#define NWARPS_OCTREE2 3
+#endif
+
 #define WARP_SIZE2 5
 #define WARP_SIZE  32
 
@@ -217,7 +221,7 @@ static __device__ __forceinline__ Box<T> ChildBox(const Box<T> &box, const int o
 
 static __forceinline__ __device__ void computeGridAndBlockSize(dim3 &grid, dim3 &block, const int np)
 {
-  const int NTHREADS = 8 * WARP_SIZE;
+  const int NTHREADS = (1<<NWARPS_OCTREE2) * WARP_SIZE;
   block = dim3(NTHREADS);
   assert(np > 0);
   grid = dim3(min(max(np/(NTHREADS*4),1), 512));
@@ -606,13 +610,16 @@ static __global__ void buildOctant(
   if (!STOREIDX)
     box = ChildBox(box, octant2process);
 
+#define NWARPS2 NWARPS_OCTREE2
+#define NWARPS  (1<<NWARPS2)
+
   /* countes number of particles in each octant of a child octant */
-  __shared__ int nShChildren [8][8][8];
-  __shared__ int      shtmp[128];
+  __shared__ int nShChildren [8][8][NWARPS];
+  __shared__ int      shtmp[8*NWARPS+64];
   __shared__ Box<T> childBox [8];
 
   int *shdata = (int*)&nShChildren[0][0][0];
-  for (int i = 0; i < 512; i += blockDim.x)
+  for (int i = 0; i < 8*8*NWARPS; i += blockDim.x)
     shdata[i + threadIdx.x] = 0;
 
   if (laneIdx == 0 && warpIdx < 8)
@@ -639,42 +646,46 @@ static __global__ void buildOctant(
       const int2 res = warpBinExclusiveScan(p4.get_oct() == octant);
       offset[octant] = res.x;
       if (laneIdx == 0)
-        shtmp[octant*8 + warpIdx] = res.y;
+        shtmp[octant*NWARPS + warpIdx] = res.y;
     }
 
     __syncthreads();
-    
-    int prefix = shtmp[warpIdx*8 + laneIdx];
+
+    if (warpIdx < 8)
+    {
+      int prefix = shtmp[warpIdx*NWARPS + laneIdx];
 #pragma unroll
-    for(int i = 0; i < 3; i++)    /* log2(8) steps */
-      prefix = shfl_scan_add_step(prefix, 1 << i);
+      for(int i = 0; i < NWARPS2; i++)    /* log2(8) steps */
+        prefix = shfl_scan_add_step(prefix, 1 << i);
 
-    const int np = __shfl(prefix, 7, WARP_SIZE);  /* total number of particles in this octant */
-    if (laneIdx == 0)
-      shtmp[64 + warpIdx] = np;
+      const int np = __shfl(prefix, NWARPS-1, WARP_SIZE);  /* total number of particles in this octant */
+      if (laneIdx == 0)
+        shtmp[8*NWARPS + warpIdx] = np;
 
-    if (laneIdx < 8)
-      shtmp[warpIdx*8 + laneIdx] = prefix - shtmp[warpIdx*8 + laneIdx];    /* convert to excluive scan */
+      if (laneIdx < NWARPS)
+        shtmp[warpIdx*NWARPS + laneIdx] = prefix - shtmp[warpIdx*NWARPS + laneIdx];    /* convert to excluive scan */
+    }
 
     __syncthreads();
 
     for (int octant = 0; octant < 8; octant++)
-      offset[octant] += __shfl(shtmp[octant*8 + laneIdx], warpIdx, WARP_SIZE);
+      offset[octant] += __shfl(shtmp[octant*NWARPS + laneIdx], warpIdx, WARP_SIZE);
 
-    if (shtmp[64+warpIdx] > 0 && laneIdx == 0)
-      shtmp[64+8+warpIdx] = atomicAdd(&octCounter[8+8+warpIdx], shtmp[64+warpIdx]);
+    if (warpIdx < 8 && laneIdx == 0)
+      if (shtmp[8*NWARPS+warpIdx] > 0)
+        shtmp[8*NWARPS+8+warpIdx] = atomicAdd(&octCounter[8+8+warpIdx], shtmp[8*NWARPS+warpIdx]);
 
     __syncthreads();
 
     /* write particles to gmem */
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
-      if (shtmp[64+octant] > 0 && p4.get_oct() == octant)
-        buff[shtmp[64+8+octant] + offset[octant]] = p4;
+      if (shtmp[8*NWARPS+octant] > 0 && p4.get_oct() == octant)
+        buff[shtmp[8*NWARPS+8+octant] + offset[octant]] = p4;
 
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
-      if (shtmp[64+octant] > 0)
+      if (shtmp[8*NWARPS+octant] > 0)
       {
         int subOctant = -1;
         if (p4.get_oct() == octant)
@@ -697,14 +708,14 @@ static __global__ void buildOctant(
 
   int (*nShChildren1)[8] = (int (*)[8])shtmp;
 
-  if (laneIdx < 8 && warpIdx < 8)
+  if (laneIdx < NWARPS && warpIdx < 8)
 #pragma unroll
     for (int k = 0; k < 8; k++)
     {
       int nSubOctant = nShChildren[k][warpIdx][laneIdx];
 #pragma unroll
-      for (int i = 2; i >= 0; i--)
-        nSubOctant += __shfl_xor(nSubOctant, 1<<i, 8);
+      for (int i = NWARPS2-1; i >= 0; i--)
+        nSubOctant += __shfl_xor(nSubOctant, 1<<i, NWARPS);
       if (laneIdx == 0)
         nShChildren1[warpIdx][k] = nSubOctant;
     }
