@@ -748,16 +748,8 @@ buildOctant(
     }
 
     int addrB0;
-#if 1  /* this doesn't work always, but must because has the same functionality as #else below */
-       /* possible compiler bug ? */
     if (laneIdx < 8)
       addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
-#else
-#pragma unroll
-    for (int octant = 0; octant < 8; octant++)
-      if (laneIdx == octant)
-        addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
-#endif
 
     int cntr = 32;
     int addrW = -1;
@@ -790,6 +782,15 @@ buildOctant(
       if (sum > 0)
       {
         const int subOctant = p4octant == octant ? p4.get_oct() : -1;
+#if 1  /* why this works, but #else doens't... compiler bug ? */
+#pragma unroll
+        for (int k = 0; k < 8; k++)
+        {
+          const int sum = warpBinReduce(k == subOctant);
+          if (laneIdx == 0) 
+            nShChildrenFine[warpIdx][octant][k] += sum;
+        }
+#else
 #pragma unroll
         for (int k = 0; k < 8; k += 4)
         {
@@ -800,21 +801,15 @@ buildOctant(
               warpBinReduce(k+3 == subOctant));
           if (laneIdx == 0) 
           {
-#if 1
             int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
             value.x += sum.x;
             value.y += sum.y;
             value.z += sum.z;
             value.w += sum.w;
             *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
-#else
-            nShChildrenFine[warpIdx][octant][k+0] += sum.x;
-            nShChildrenFine[warpIdx][octant][k+1] += sum.y;
-            nShChildrenFine[warpIdx][octant][k+2] += sum.z;
-            nShChildrenFine[warpIdx][octant][k+3] += sum.w;
-#endif
           }
         }
+#endif
         cntr -= sum;
       }
     }
@@ -990,7 +985,7 @@ buildOctant(
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
-#if NWARPS==8
+#if NWARPS==88
       if (nCellmax <= block.x)
       {
         grid.x = 1;
