@@ -109,7 +109,12 @@ __device__ unsigned int ncells = 0;
 
 __device__   int *memPool;
 __device__   CellData *cellDataList;
-__device__   Particle4<float> *ptclVel;
+#ifdef FP64
+__device__   Particle4<double> *ptclVel;
+#else
+__device__   Particle4<float> *ptclVel;  /* hack */
+#endif
+
 __constant__ int d_node_max;
 __constant__ int d_cell_max;
 __device__ unsigned long long io_words;
@@ -133,6 +138,27 @@ template<> __device__ __forceinline__ int Particle4<float>::set_oct(const int oc
 {
   const int idx = get_idx();
   packed_data.w = __int_as_float((idx << 4) | oct);
+  return oct;
+}
+
+template<> __device__ __forceinline__ int Particle4<double>::get_idx() const
+{
+  return ((unsigned int)(packed_data.w) >> 4) & 0xF0000000;
+}
+template<> __device__ __forceinline__ int Particle4<double>::get_oct() const
+{
+  return (unsigned int)(packed_data.w) & 0xF;
+}
+template<> __device__ __forceinline__ int Particle4<double>::set_idx(const int idx)
+{
+  const int oct = get_oct();
+  packed_data.w = (unsigned int)((idx << 4) | oct);
+  return idx;
+}
+template<> __device__ __forceinline__ int Particle4<double>::set_oct(const int oct)
+{
+  const int idx = get_idx();
+  packed_data.w = (unsigned int)((idx << 4) | oct);
   return oct;
 }
 
@@ -923,7 +949,7 @@ static __global__ void buildOctant(
 /******* compute multipole moments ****/
 
   template<int NTHREADS>
-static __device__ double reduceBlock(double sum)
+__forceinline__ __device__ double reduceBlock(double sum)
 {
   extern volatile __shared__ double sh[];
   const int tid = threadIdx.x;
@@ -1047,7 +1073,7 @@ void computeNodeProperties(
 
 
 template<typename T, const int NTHREADS>
-static __device__ void reduceBlock(
+__forceinline__ __device__ void reduceBlock(
     volatile Position<T> *shmin,
     volatile Position<T> *shmax,
     Position<T> bmin,
@@ -1217,10 +1243,8 @@ static __global__ void computeBoundingBox(
       T hsize = T(1.0);
       while (hsize > h) hsize *= T(0.5);
       while (hsize < h) hsize *= T(2.0);
-#if 0
-      hsize *= T(128.0);
-#endif
 
+#if 0
       const int NMAXLEVEL = 20;
 
       const T hquant = hsize / T(1<<NMAXLEVEL);
@@ -1229,6 +1253,9 @@ static __global__ void computeBoundingBox(
       const long long nz = (long long)(cvec.z/hquant);
 
       const Position<T> centre(hquant * T(nx), hquant * T(ny), hquant * T(nz));
+#else
+      const Position<T> centre = cvec;
+#endif
 
       *box_ptr = Box<T>(centre, hsize);
     }
@@ -1465,7 +1492,7 @@ void testTree(const int n, const unsigned int seed)
 
   /* allocate memory for the stack nodes */
 
-  const int node_max = n/10;
+  const int node_max = n/30;
   const int nstack   = (8+8+8+64+8)*node_max;
   fprintf(stderr, "nstack= %g MB \n", sizeof(int)*nstack/1024.0/1024.0);
   cuda_mem<int> d_stack_memory_pool;
