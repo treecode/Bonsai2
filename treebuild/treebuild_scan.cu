@@ -707,7 +707,6 @@ static __global__ void buildOctant(
         }
         cntr -= sum;
       }
-
     }
 #endif
   }
@@ -1281,6 +1280,7 @@ static __global__ void countAtRootNode(
     const Box<T> box,
     const Particle4<T> *ptclPos)
 {
+  int np_octant[8] = {0};
   const int beg = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = beg; i < n; i += gridDim.x * blockDim.x)
     if (i < n)
@@ -1288,8 +1288,27 @@ static __global__ void countAtRootNode(
       const Particle4<T> p = ptclPos[i];
       const Position<T> pos(p.x(), p.y(), p.z());
       const int octant = Octant(box.centre, pos);
-      atomicAdd(&octCounter[8+octant],1);
+      np_octant[0] += (octant == 0);
+      np_octant[1] += (octant == 1);
+      np_octant[2] += (octant == 2);
+      np_octant[3] += (octant == 3);
+      np_octant[4] += (octant == 4);
+      np_octant[5] += (octant == 5);
+      np_octant[6] += (octant == 6);
+      np_octant[7] += (octant == 7);
     };
+
+  const int laneIdx = threadIdx.x & (WARP_SIZE-1);
+#pragma unroll
+  for (int k = 0; k < 8; k++)
+  {
+    int np = np_octant[k];
+#pragma unroll
+    for (int i = 4; i >= 0; i--)
+      np += __shfl_xor(np, 1<<i, WARP_SIZE);
+    if (laneIdx == 0)
+      atomicAdd(&octCounter[8+k],np);
+  }
 
 #if 0
   __shared__ bool lastBlock;
