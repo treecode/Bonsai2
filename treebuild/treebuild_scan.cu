@@ -617,107 +617,6 @@ buildOctant(
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
-#if 0
-  for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
-  {
-    Particle4<T> p4 = ptcl[min(i+threadIdx.x, nEnd-1)];
-
-    int p4octant = p4.get_oct();
-    if (STOREIDX)
-    {
-      p4.set_idx(i + threadIdx.x);
-      p4octant = Octant(box.centre, Position<T>(p4.x(), p4.y(), p4.z()));
-    }
-
-    p4octant = i+threadIdx.x < nEnd ? p4octant : 0xF; 
-
-    if (p4octant < 8)
-    {
-      const int p4subOctant = Octant(shChildBox[p4octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
-      p4.set_oct(p4subOctant);
-    }
-
-    /* compute number of particles to write in each octant */
-    int np = 0;
-#pragma unroll
-    for (int octant = 0; octant < 8; octant++)
-    {
-      const int sum = warpBinReduce(p4octant == octant);
-      if (octant == laneIdx)
-        np = sum;
-    }
-
-    /* accumulate atomic counters with number of particles to be written into an octant */
-    int addrB0;
-    if (np > 0)
-      addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
-
-    /* compute offset for each particle */ 
-    int cntr = 32; 
-    int addrW = -1;
-#pragma unroll
-    for (int octant = 0; octant < 8; octant++)
-    {
-      const int sum = warpBinReduce(p4octant == octant);
-      if (sum > 0)
-      {
-        const int offset = warpBinExclusiveScan1(p4octant == octant);
-        const int addrB = __shfl(addrB0, octant, WARP_SIZE);
-        if (p4octant == octant)
-          addrW = addrB + offset;
-        cntr -= sum;
-   //     if (cntr == 0) break;
-      }
-    }
-
-    /* writes sorted particels into coalesced manner */
-    if (addrW >= 0)
-      buff[addrW] = p4;
-
-    /* now count number of particle in suboctants of each octant */
-
-#if 1  
-
-    if (p4octant < 8)
-      atomicAdd(&nShChildrenFine[warpIdx][p4octant][p4.get_oct()],1);
-
-#else  /* does the same thing but without atomics , however there is too much work.. */
-    /* question, how to further optimize this functionality */
-
-    cntr = 32;
-#pragma unroll
-    for (int octant = 0; octant < 8; octant++)
-    {
-    //  if (cntr == 0) break;
-
-      const int sum = warpBinReduce(p4octant == octant);
-      if (sum > 0)
-      {
-        const int subOctant = p4octant == octant ? p4.get_oct() : -1;
-#pragma unroll
-        for (int k = 0; k < 8; k += 4)
-        {
-          const int4 sum = make_int4(
-              warpBinReduce(k   == subOctant),
-              warpBinReduce(k+1 == subOctant),
-              warpBinReduce(k+2 == subOctant),
-              warpBinReduce(k+3 == subOctant));
-          if (laneIdx == 0) 
-          {
-            int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
-            value.x += sum.x;
-            value.y += sum.y;
-            value.z += sum.z;
-            value.w += sum.w;
-            *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
-          }
-        }
-        cntr -= sum;
-      }
-    }
-#endif
-  }
-#else
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
     Particle4<T> p4 = ptcl[min(i+threadIdx.x, nEnd-1)];
@@ -782,7 +681,7 @@ buildOctant(
       if (sum > 0)
       {
         const int subOctant = p4octant == octant ? p4.get_oct() : -1;
-#if 1  /* why this works, but #else doens't... compiler bug ? */
+#if 1  /* why this works, but #else doesn't... compiler bug ? */
 #pragma unroll
         for (int k = 0; k < 8; k++)
         {
@@ -814,7 +713,6 @@ buildOctant(
       }
     }
   }
-#endif
   __syncthreads();
 
   if (warpIdx >= 8) return;
