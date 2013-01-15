@@ -614,16 +614,18 @@ static __global__ void buildOctant(
 #define NWARPS  (1<<NWARPS2)
 
   /* countes number of particles in each octant of a child octant */
-  __shared__ int nShChildren [8][8][NWARPS];
-  __shared__ int      shtmp[8*NWARPS+64];
-  __shared__ Box<T> childBox [8];
+  __shared__ int nShChildrenFine[NWARPS][9][8];
+  __shared__ int nShChildren[8][8];
 
-  int *shdata = (int*)&nShChildren[0][0][0];
-  for (int i = 0; i < 8*8*NWARPS; i += blockDim.x)
-    shdata[i + threadIdx.x] = 0;
+  Box<T> *shChildBox = (Box<T>*)&nShChildren[0][0];
+
+  int *shdata = (int*)&nShChildrenFine[0][0][0];
+  for (int i = 0; i < 9*9*NWARPS; i += blockDim.x)
+    if (i + threadIdx.x < 8*9*NWARPS)
+      shdata[i + threadIdx.x] = 0;
 
   if (laneIdx == 0 && warpIdx < 8)
-    childBox[warpIdx] = ChildBox(box, warpIdx);
+    shChildBox[warpIdx] = ChildBox(box, warpIdx);
   
   __syncthreads();
 
@@ -632,99 +634,86 @@ static __global__ void buildOctant(
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
     Particle4<T> p4 = ptcl[min(i+threadIdx.x, nEnd-1)];
+
+    const int mask = -(i+threadIdx.x < nEnd);
+    int p4octant = p4.get_oct();
     if (STOREIDX)
+    {
       p4.set_idx(i + threadIdx.x);
+      p4octant = Octant(box.centre, Position<T>(p4.x(), p4.y(), p4.z()));
+    }
 
-    const bool mask = i + threadIdx.x < nEnd;
-    const int  p4octant = mask ? Octant(box.centre, Position<T>(p4.x(), p4.y(), p4.z())) : 0xF;
-    p4.set_oct(p4octant);
+    p4octant = (mask & p4octant) + ((~mask) & 0xF);
 
-    int offset[8];
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
     {
-      const int2 res = warpBinExclusiveScan(p4.get_oct() == octant);
-      offset[octant] = res.x;
-      if (laneIdx == 0)
-        shtmp[octant*NWARPS + warpIdx] = res.y;
-    }
+      const int2 offset = warpBinExclusiveScan(p4octant == octant);
 
-    __syncthreads();
-
-    if (warpIdx < 8)
-    {
-      int prefix = shtmp[warpIdx*NWARPS + laneIdx];
-#pragma unroll
-      for(int i = 0; i < NWARPS2; i++)    /* log2(8) steps */
-        prefix = shfl_scan_add_step(prefix, 1 << i);
-
-      const int np = __shfl(prefix, NWARPS-1, WARP_SIZE);  /* total number of particles in this octant */
-      if (laneIdx == 0)
-        shtmp[8*NWARPS + warpIdx] = np;
-
-      if (laneIdx < NWARPS)
-        shtmp[warpIdx*NWARPS + laneIdx] = prefix - shtmp[warpIdx*NWARPS + laneIdx];    /* convert to excluive scan */
-    }
-
-    __syncthreads();
-
-    for (int octant = 0; octant < 8; octant++)
-      offset[octant] += __shfl(shtmp[octant*NWARPS + laneIdx], warpIdx, WARP_SIZE);
-
-    if (warpIdx < 8 && laneIdx == 0)
-      if (shtmp[8*NWARPS+warpIdx] > 0)
-        shtmp[8*NWARPS+8+warpIdx] = atomicAdd(&octCounter[8+8+warpIdx], shtmp[8*NWARPS+warpIdx]);
-
-    __syncthreads();
-
-    /* write particles to gmem */
-#pragma unroll
-    for (int octant = 0; octant < 8; octant++)
-      if (shtmp[8*NWARPS+octant] > 0 && p4.get_oct() == octant)
-        buff[shtmp[8*NWARPS+8+octant] + offset[octant]] = p4;
-
-#pragma unroll
-    for (int octant = 0; octant < 8; octant++)
-      if (shtmp[8*NWARPS+octant] > 0)
+      if (offset.y > 0)
       {
+        int addrB;
+        if (laneIdx == 0)
+          addrB = atomicAdd(&octCounter[8+8+octant], offset.y);
+        addrB = __shfl(addrB, 0, WARP_SIZE);
+
         int subOctant = -1;
-        if (p4.get_oct() == octant)
-          subOctant = Octant(childBox[octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
+        if (p4octant == octant)
+        {
+          subOctant = Octant(shChildBox[octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
+          p4.set_oct(subOctant);
+          buff[addrB + offset.x] = p4;
+        }
 
-        int sum[8];
 #pragma unroll
-        for (int k = 0; k < 8; k++)
-          sum[k] = warpBinReduce(k == subOctant);
-
-        if (laneIdx == 0) 
-#pragma unroll
-          for (int k = 0; k < 8; k++)
-            nShChildren[k][octant][warpIdx] += sum[k];
+        for (int k = 0; k < 8; k += 4)
+        {
+          const int4 sum = make_int4(
+            warpBinReduce(k   == subOctant),
+            warpBinReduce(k+1 == subOctant),
+            warpBinReduce(k+2 == subOctant),
+            warpBinReduce(k+3 == subOctant));
+          if (laneIdx == 0) 
+          {
+            int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
+            value.x += sum.x;
+            value.y += sum.y;
+            value.z += sum.z;
+            value.w += sum.w;
+            *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
+          }
+        }
       }
 
-    __syncthreads();
-
+    }
   }
+  
+  if (warpIdx >= 8) return;
 
-  int (*nShChildren1)[8] = (int (*)[8])shtmp;
+  __syncthreads();
 
   if (laneIdx < NWARPS && warpIdx < 8)
 #pragma unroll
-    for (int k = 0; k < 8; k++)
+    for (int k = 0; k < 8; k += 4)
     {
-      int nSubOctant = nShChildren[k][warpIdx][laneIdx];
+      int4 nSubOctant = *(int4*)&nShChildrenFine[laneIdx][warpIdx][k];
 #pragma unroll
       for (int i = NWARPS2-1; i >= 0; i--)
-        nSubOctant += __shfl_xor(nSubOctant, 1<<i, NWARPS);
+      {
+        nSubOctant.x += __shfl_xor(nSubOctant.x, 1<<i, NWARPS);
+        nSubOctant.y += __shfl_xor(nSubOctant.y, 1<<i, NWARPS);
+        nSubOctant.z += __shfl_xor(nSubOctant.z, 1<<i, NWARPS);
+        nSubOctant.w += __shfl_xor(nSubOctant.w, 1<<i, NWARPS);
+      }
       if (laneIdx == 0)
-        nShChildren1[warpIdx][k] = nSubOctant;
+        *(int4*)&nShChildren[warpIdx][k] = nSubOctant;
     }
 
   __syncthreads();
 
   if (laneIdx < 8 && warpIdx < 8)
-    if (nShChildren1[warpIdx][laneIdx] > 0)
-      atomicAdd(&octCounter[8+16+warpIdx*8 + laneIdx], nShChildren1[warpIdx][laneIdx]);
+    if (nShChildren[warpIdx][laneIdx] > 0)
+      atomicAdd(&octCounter[8+16+warpIdx*8 + laneIdx], nShChildren[warpIdx][laneIdx]);
 
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
 
@@ -734,7 +723,7 @@ static __global__ void buildOctant(
    * this should increase the degree of parallelism
    */
 
-  int *shmem = &nShChildren[0][0][0];
+  int *shmem = &nShChildrenFine[0][0][0];
   if (warpIdx == 0)
     shmem[laneIdx] = 0;
 
@@ -761,7 +750,6 @@ static __global__ void buildOctant(
   __syncthreads();
 
   /* compute beginning and then end addresses of the sorted particles  in the child cell */
-  if (warpIdx >= 8) return;
 
   const int nCell = __shfl(data, 8+warpIdx, WARP_SIZE);
   const int nEnd1 = octCounter[8+8+warpIdx];
