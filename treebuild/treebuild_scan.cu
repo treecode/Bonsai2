@@ -251,6 +251,11 @@ static __device__ __forceinline__ int2 warpBinExclusiveScan(const bool p)
   const unsigned int b = __ballot(p);
   return make_int2(__popc(b & lanemask_lt()), __popc(b));
 }
+static __device__ __forceinline__ int warpBinExclusiveScan1(const bool p)
+{
+  const unsigned int b = __ballot(p);
+  return __popc(b & lanemask_lt());
+}
 static __device__ __forceinline__ int warpBinReduce(const bool p)
 {
   const unsigned int b = __ballot(p);
@@ -620,10 +625,11 @@ static __global__ void buildOctant(
   Box<T> *shChildBox = (Box<T>*)&nShChildren[0][0];
 
   int *shdata = (int*)&nShChildrenFine[0][0][0];
-  for (int i = 0; i < 9*9*NWARPS; i += blockDim.x)
+#pragma unroll 
+  for (int i = 0; i < 9*9*NWARPS; i += NWARPS*WARP_SIZE)
     if (i + threadIdx.x < 8*9*NWARPS)
       shdata[i + threadIdx.x] = 0;
-
+ 
   if (laneIdx == 0 && warpIdx < 8)
     shChildBox[warpIdx] = ChildBox(box, warpIdx);
   
@@ -635,7 +641,6 @@ static __global__ void buildOctant(
   {
     Particle4<T> p4 = ptcl[min(i+threadIdx.x, nEnd-1)];
 
-    const int mask = -(i+threadIdx.x < nEnd);
     int p4octant = p4.get_oct();
     if (STOREIDX)
     {
@@ -643,40 +648,79 @@ static __global__ void buildOctant(
       p4octant = Octant(box.centre, Position<T>(p4.x(), p4.y(), p4.z()));
     }
 
-    p4octant = (mask & p4octant) + ((~mask) & 0xF);
+    p4octant = i+threadIdx.x < nEnd ? p4octant : 0xF; 
 
-    int cntr = 32;
+    if (p4octant < 8)
+    {
+      const int p4subOctant = Octant(shChildBox[p4octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
+      p4.set_oct(p4subOctant);
+    }
 
+    /* compute number of particles to write in each octant */
+    int np = 0;
+#pragma unroll
+    for (int octant = 0; octant < 8; octant++)
+    {
+      const int sum = warpBinReduce(p4octant == octant);
+      if (octant == laneIdx)
+        np = sum;
+    }
+
+    /* accumulate atomic counters with number of particles to be written into an octant */
+    int addrB0;
+    if (np > 0)
+      addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
+  
+    /* compute offset for each particle */ 
+    int cntr = 32; 
+    int addrW = -1;
+#pragma unroll
+    for (int octant = 0; octant < 8; octant++)
+    {
+      const int sum = warpBinReduce(p4octant == octant);
+      if (sum > 0)
+      {
+        const int offset = warpBinExclusiveScan1(p4octant == octant);
+        const int addrB = __shfl(addrB0, octant, WARP_SIZE);
+        if (p4octant == octant)
+          addrW = addrB + offset;
+        cntr -= sum;
+        if (cntr == 0) break;
+      }
+    }
+
+    /* writes sorted particels into coalesced manner */
+    if (addrW >= 0)
+      buff[addrW] = p4;
+
+    /* now count number of particle in suboctants of each octant */
+
+#if 0  
+
+    if (p4octant < 8)
+      atomicAdd(&nShChildrenFine[warpIdx][p4octant][p4.get_oct()],1);
+
+#else  /* does the same thing but without atomics , however there is too much work.. */
+       /* question, how to further optimize this functionality */
+
+    cntr = 32;
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
     {
       if (cntr == 0) break;
 
-      const int2 offset = warpBinExclusiveScan(p4octant == octant);
-
-      if (offset.y > 0)
+      const int sum = warpBinReduce(p4octant == octant);
+      if (sum > 0)
       {
-        int addrB;
-        if (laneIdx == 0)
-          addrB = atomicAdd(&octCounter[8+8+octant], offset.y);
-        addrB = __shfl(addrB, 0, WARP_SIZE);
-
-        int subOctant = -1;
-        if (p4octant == octant)
-        {
-          subOctant = Octant(shChildBox[octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
-          p4.set_oct(subOctant);
-          buff[addrB + offset.x] = p4;
-        }
-
+        const int subOctant = p4octant == octant ? p4.get_oct() : -1;
 #pragma unroll
         for (int k = 0; k < 8; k += 4)
         {
           const int4 sum = make_int4(
-            warpBinReduce(k   == subOctant),
-            warpBinReduce(k+1 == subOctant),
-            warpBinReduce(k+2 == subOctant),
-            warpBinReduce(k+3 == subOctant));
+              warpBinReduce(k   == subOctant),
+              warpBinReduce(k+1 == subOctant),
+              warpBinReduce(k+2 == subOctant),
+              warpBinReduce(k+3 == subOctant));
           if (laneIdx == 0) 
           {
             int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
@@ -687,12 +731,13 @@ static __global__ void buildOctant(
             *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
           }
         }
-        cntr -= offset.y;
+        cntr -= sum;
       }
 
     }
+#endif
   }
-  
+
   if (warpIdx >= 8) return;
 
   __syncthreads();
@@ -722,13 +767,14 @@ static __global__ void buildOctant(
 
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
 
+
   /* detect last thread block for unique y-coordinate of the grid:
    * mind, this cannot be done on the host, because we don't detect last 
    * block on the grid, but instead the last x-block for each of the y-coordainte of the grid
    * this should increase the degree of parallelism
    */
 
-  int *shmem = &nShChildrenFine[0][0][0];
+  int *shmem = &nShChildren[0][0];
   if (warpIdx == 0)
     shmem[laneIdx] = 0;
 
