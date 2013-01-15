@@ -12,6 +12,9 @@
 #define NWARPS_OCTREE2 3
 #endif
 
+#define NWARPS2 NWARPS_OCTREE2
+#define NWARPS  (1<<NWARPS2)
+
 #define WARP_SIZE2 5
 #define WARP_SIZE  32
 
@@ -263,7 +266,7 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
 }
 
 
-template<int NPERT, int NLEAF, typename T>
+template<int NLEAF, typename T>
 static __global__ void buildOctantSingle(
     Box<T> box,
     const int cellParentIndex,
@@ -299,27 +302,21 @@ static __global__ void buildOctantSingle(
 
   assert(blockIdx.x == 0);
 
-  const int BLOCKDIM = 8*WARP_SIZE;
   __shared__ Particle4<T> dataX[8*WARP_SIZE];
 
   /* process particle array */
-  Particle4<T> p4list[NPERT];
-#pragma unroll
-  for (int kk = 0; kk < NPERT; kk++)
-    p4list[kk] = ptcl[min(nBeg + kk*BLOCKDIM+threadIdx.x,nEnd-1)];
+  Particle4<T> p4list = ptcl[min(nBeg + threadIdx.x, nEnd-1)];
 
-#pragma unroll
-  for (int kk = 0; kk < NPERT; kk++)
   {
-    dataX[threadIdx.x] = p4list[kk];
+    dataX[threadIdx.x] = p4list;
     __syncthreads(); 
 
 #pragma unroll
     for (int k = 0; k < 8; k++)  /* process particles in shared memory */
     {
-      if (nBeg + (k<<WARP_SIZE2) + kk * BLOCKDIM >= nEnd) break;
+      if (nBeg + (k<<WARP_SIZE2) >= nEnd) break;
       const int locid = (k<<WARP_SIZE2) + laneIdx;
-      const int  addr = nBeg + + kk * BLOCKDIM + locid;
+      const int  addr = nBeg + locid;
       const bool mask = addr < nEnd;
 
       Particle4<T> p4 = dataX[locid];
@@ -498,30 +495,9 @@ static __global__ void buildOctantSingle(
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
       grid.x = 1;
-      if (nCellmax <= block.x)
-      {
-        buildOctantSingle<1,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
-      else if (nCellmax <= 2*block.x)
-      {
-        buildOctantSingle<2,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
-      else if (nCellmax <= 3*block.x)
-      {
-        buildOctantSingle<3,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
-      else 
-      {
-        buildOctantSingle<4,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
+      buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
+        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+         octant_mask, octCounterNbase, buff, ptcl, level+1);
     }
   }
 
@@ -615,8 +591,6 @@ static __global__ void buildOctant(
   if (!STOREIDX)
     box = ChildBox(box, octant2process);
 
-#define NWARPS2 NWARPS_OCTREE2
-#define NWARPS  (1<<NWARPS2)
 
   /* countes number of particles in each octant of a child octant */
   __shared__ int nShChildrenFine[NWARPS][9][8];
@@ -629,10 +603,10 @@ static __global__ void buildOctant(
   for (int i = 0; i < 9*9*NWARPS; i += NWARPS*WARP_SIZE)
     if (i + threadIdx.x < 8*9*NWARPS)
       shdata[i + threadIdx.x] = 0;
- 
+
   if (laneIdx == 0 && warpIdx < 8)
     shChildBox[warpIdx] = ChildBox(box, warpIdx);
-  
+
   __syncthreads();
 
   /* process particle array */
@@ -670,7 +644,7 @@ static __global__ void buildOctant(
     int addrB0;
     if (np > 0)
       addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
-  
+
     /* compute offset for each particle */ 
     int cntr = 32; 
     int addrW = -1;
@@ -701,7 +675,7 @@ static __global__ void buildOctant(
       atomicAdd(&nShChildrenFine[warpIdx][p4octant][p4.get_oct()],1);
 
 #else  /* does the same thing but without atomics , however there is too much work.. */
-       /* question, how to further optimize this functionality */
+    /* question, how to further optimize this functionality */
 
     cntr = 32;
 #pragma unroll
@@ -907,36 +881,13 @@ static __global__ void buildOctant(
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
-      if (nCellmax <= 0*block.x)
+      if (nCellmax <= block.x)
       {
         grid.x = 1;
-        buildOctantSingle<1,NLEAF,T><<<grid,block,0,stream>>>
+        buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
           (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
-#if 0
-      else if (nCellmax <= 2*block.x)
-      {
-        grid.x = 1;
-        buildOctantSingle<2,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
-      else if (nCellmax <= 3*block.x)
-      {
-        grid.x = 1;
-        buildOctantSingle<3,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
-      else if (nCellmax <= 4*block.x)
-      {
-        grid.x = 1;
-        buildOctantSingle<4,NLEAF,T><<<grid,block,0,stream>>>
-          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
-           octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
-#endif
       else
       {
         buildOctant<NLEAF,T,false><<<grid,block,0,stream>>>
@@ -1548,14 +1499,9 @@ void testTree(const int n, const unsigned int seed)
 
   /* prefer shared memory for kernels */
 
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<1,NLEAF,T>, cudaFuncCachePreferShared));
-#if 0
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<2,NLEAF,T>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<3,NLEAF,T>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<4,NLEAF,T>, cudaFuncCachePreferShared));
-#endif
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferShared));
 
   /**** launch tree building kernel ****/
 
