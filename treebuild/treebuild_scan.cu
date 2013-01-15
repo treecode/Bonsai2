@@ -881,6 +881,7 @@ static __global__ void buildOctant(
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
+#if NWARPS==8
       if (nCellmax <= block.x)
       {
         grid.x = 1;
@@ -889,11 +890,10 @@ static __global__ void buildOctant(
            octant_mask, octCounterNbase, buff, ptcl, level+1);
       }
       else
-      {
+#endif
         buildOctant<NLEAF,T,false><<<grid,block,0,stream>>>
           (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
-      }
     }
   }
 
