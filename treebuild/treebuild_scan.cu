@@ -144,22 +144,22 @@ template<> __device__ __forceinline__ int Particle4<float>::set_oct(const int oc
 
 template<> __device__ __forceinline__ int Particle4<double>::get_idx() const
 {
-  return ((unsigned int)(packed_data.w) >> 4) & 0xF0000000;
+  return ((unsigned long long)(packed_data.w) >> 4) & 0xF0000000;
 }
 template<> __device__ __forceinline__ int Particle4<double>::get_oct() const
 {
-  return (unsigned int)(packed_data.w) & 0xF;
+  return (unsigned long long)(packed_data.w) & 0xF;
 }
 template<> __device__ __forceinline__ int Particle4<double>::set_idx(const int idx)
 {
   const int oct = get_oct();
-  packed_data.w = (unsigned int)((idx << 4) | oct);
+  packed_data.w = (unsigned long long)((idx << 4) | oct);
   return idx;
 }
 template<> __device__ __forceinline__ int Particle4<double>::set_oct(const int oct)
 {
   const int idx = get_idx();
-  packed_data.w = (unsigned int)((idx << 4) | oct);
+  packed_data.w = (unsigned long long)((idx << 4) | oct);
   return oct;
 }
 
@@ -602,7 +602,7 @@ static __global__ void buildOctant(
 
   int *shdata = (int*)&nShChildrenFine[0][0][0];
 #pragma unroll 
-  for (int i = 0; i < 9*9*NWARPS; i += NWARPS*WARP_SIZE)
+  for (int i = 0; i < 8*9*NWARPS; i += NWARPS*WARP_SIZE)
     if (i + threadIdx.x < 8*9*NWARPS)
       shdata[i + threadIdx.x] = 0;
 
@@ -661,7 +661,7 @@ static __global__ void buildOctant(
         if (p4octant == octant)
           addrW = addrB + offset;
         cntr -= sum;
-        if (cntr == 0) break;
+   //     if (cntr == 0) break;
       }
     }
 
@@ -671,7 +671,7 @@ static __global__ void buildOctant(
 
     /* now count number of particle in suboctants of each octant */
 
-#if 0  
+#if 1  
 
     if (p4octant < 8)
       atomicAdd(&nShChildrenFine[warpIdx][p4octant][p4.get_oct()],1);
@@ -683,7 +683,7 @@ static __global__ void buildOctant(
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
     {
-      if (cntr == 0) break;
+    //  if (cntr == 0) break;
 
       const int sum = warpBinReduce(p4octant == octant);
       if (sum > 0)
@@ -712,16 +712,16 @@ static __global__ void buildOctant(
     }
 #endif
   }
+  __syncthreads();
 
   if (warpIdx >= 8) return;
 
-  __syncthreads();
 
-  if (laneIdx < NWARPS && warpIdx < 8)
+  if (warpIdx < 8)
 #pragma unroll
     for (int k = 0; k < 8; k += 4)
     {
-      int4 nSubOctant = *(int4*)&nShChildrenFine[laneIdx][warpIdx][k];
+      int4 nSubOctant = laneIdx < NWARPS ? (*(int4*)&nShChildrenFine[laneIdx][warpIdx][k]) : make_int4(0,0,0,0);
 #pragma unroll
       for (int i = NWARPS2-1; i >= 0; i--)
       {
@@ -1245,7 +1245,7 @@ static __global__ void computeBoundingBox(
       while (hsize > h) hsize *= T(0.5);
       while (hsize < h) hsize *= T(2.0);
 
-#if 0
+#if 1
       const int NMAXLEVEL = 20;
 
       const T hquant = hsize / T(1<<NMAXLEVEL);
@@ -1493,7 +1493,7 @@ void testTree(const int n, const unsigned int seed)
 
   /* allocate memory for the stack nodes */
 
-  const int node_max = n/30;
+  const int node_max = n/10;
   const int nstack   = (8+8+8+64+8)*node_max;
   fprintf(stderr, "nstack= %g MB \n", sizeof(int)*nstack/1024.0/1024.0);
   cuda_mem<int> d_stack_memory_pool;

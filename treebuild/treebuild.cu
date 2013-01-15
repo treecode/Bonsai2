@@ -102,11 +102,14 @@ __device__ unsigned int ncells = 0;
 
 __device__   int *memPool;
 __device__   CellData *cellDataList;
-__device__   Particle4<float> *ptclVel;
+#ifdef FP64
+__device__   Particle4<double> *ptclVel;
+#else
+__device__   Particle4<float> *ptclVel;  /* hack */
+#endif
 __constant__ int d_node_max;
 __constant__ int d_cell_max;
 __device__ unsigned long long io_words;
-
 
 template<> __device__ __forceinline__ int Particle4<float>::get_idx() const
 {
@@ -126,6 +129,27 @@ template<> __device__ __forceinline__ int Particle4<float>::set_oct(const int oc
 {
   const int idx = get_idx();
   packed_data.w = __int_as_float((idx << 4) | oct);
+  return oct;
+}
+
+template<> __device__ __forceinline__ int Particle4<double>::get_idx() const
+{
+  return ((unsigned long long)(packed_data.w) >> 4) & 0xF0000000;
+}
+template<> __device__ __forceinline__ int Particle4<double>::get_oct() const
+{
+  return (unsigned long long)(packed_data.w) & 0xF;
+}
+template<> __device__ __forceinline__ int Particle4<double>::set_idx(const int idx)
+{
+  const int oct = get_oct();
+  packed_data.w = (unsigned long long)((idx << 4) | oct);
+  return idx;
+}
+template<> __device__ __forceinline__ int Particle4<double>::set_oct(const int oct)
+{
+  const int idx = get_idx();
+  packed_data.w = (unsigned long long)((idx << 4) | oct);
   return oct;
 }
 
@@ -1294,6 +1318,7 @@ static __global__ void countAtRootNode(
     const Box<T> box,
     const Particle4<T> *ptclPos)
 {
+  int np_octant[8] = {0};
   const int beg = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = beg; i < n; i += gridDim.x * blockDim.x)
     if (i < n)
@@ -1301,20 +1326,28 @@ static __global__ void countAtRootNode(
       const Particle4<T> p = ptclPos[i];
       const Position<T> pos(p.x(), p.y(), p.z());
       const int octant = Octant(box.centre, pos);
-      atomicAdd(&octCounter[8+octant],1);
+      np_octant[0] += (octant == 0);
+      np_octant[1] += (octant == 1);
+      np_octant[2] += (octant == 2);
+      np_octant[3] += (octant == 3);
+      np_octant[4] += (octant == 4);
+      np_octant[5] += (octant == 5);
+      np_octant[6] += (octant == 6);
+      np_octant[7] += (octant == 7);
     };
 
-#if 0
-  __shared__ bool lastBlock;
-  __threadfence();
-  if (threadIdx.x == 0)
+  const int laneIdx = threadIdx.x & (WARP_SIZE-1);
+#pragma unroll
+  for (int k = 0; k < 8; k++)
   {
-    const int ticket = atomicInc((unsigned int*)octCounter, gridDim.x);
-    lastBlock = (ticket == gridDim.x-1);
-  };
+    int np = np_octant[k];
+#pragma unroll
+    for (int i = 4; i >= 0; i--)
+      np += __shfl_xor(np, 1<<i, WARP_SIZE);
+    if (laneIdx == 0)
+      atomicAdd(&octCounter[8+k],np);
+  }
 
-  __syncthreads();
-#endif
 }
 
 template<int NLEAF, typename T>
