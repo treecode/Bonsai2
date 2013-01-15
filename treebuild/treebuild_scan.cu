@@ -613,6 +613,7 @@ static __global__ void buildOctant(
 
   /* process particle array */
   const int nBeg_block = nBeg + blockIdx.x * blockDim.x;
+#if 0
   for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
   {
     Particle4<T> p4 = ptcl[min(i+threadIdx.x, nEnd-1)];
@@ -712,6 +713,102 @@ static __global__ void buildOctant(
     }
 #endif
   }
+#else
+  for (int i = nBeg_block; i < nEnd; i += gridDim.x * blockDim.x)
+  {
+    Particle4<T> p4 = ptcl[min(i+threadIdx.x, nEnd-1)];
+
+    int p4octant = p4.get_oct();
+    if (STOREIDX)
+    {
+      p4.set_idx(i + threadIdx.x);
+      p4octant = Octant(box.centre, Position<T>(p4.x(), p4.y(), p4.z()));
+    }
+    
+    p4octant = i+threadIdx.x < nEnd ? p4octant : 0xF; 
+
+    if (p4octant < 8)
+    {
+      const int p4subOctant = Octant(shChildBox[p4octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
+      p4.set_oct(p4subOctant);
+    }
+
+    /******** test here *********/
+    int np = 0;
+#pragma unroll
+    for (int octant = 0; octant < 8; octant++)
+    {
+      const int sum = warpBinReduce(p4octant == octant);
+      if (octant == laneIdx)
+        np = sum;
+    }
+
+    int addrB0;
+#if 1  /* this doesn't work always, but must because has the same functionality as #else below */
+       /* possible compiler bug ? */
+    if (laneIdx < 8)
+      addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
+#else
+#pragma unroll
+    for (int octant = 0; octant < 8; octant++)
+      if (laneIdx == octant)
+        addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
+#endif
+
+    int cntr = 32;
+    int addrW = -1;
+#pragma unroll
+    for (int octant = 0; octant < 8; octant++)
+    {
+      const int sum = warpBinReduce(p4octant == octant);
+
+      if (sum > 0)
+      {
+        const int offset = warpBinExclusiveScan1(p4octant == octant);
+        const int addrB = __shfl(addrB0, octant, WARP_SIZE);
+        if (p4octant == octant)
+          addrW = addrB + offset;
+        cntr -= sum;
+        if (cntr == 0) break;
+      }
+    }
+    /*************** end test here ************/
+          
+    if (addrW >= 0)
+      buff[addrW] = p4;
+
+    cntr = 32;
+#pragma unroll
+    for (int octant = 0; octant < 8; octant++)
+    {
+      if (cntr == 0) break;
+      const int sum = warpBinReduce(p4octant == octant);
+      if (sum > 0)
+      {
+        const int subOctant = p4octant == octant ? p4.get_oct() : -1;
+#pragma unroll
+        for (int k = 0; k < 8; k += 4)
+        {
+          const int4 sum = make_int4(
+              warpBinReduce(k   == subOctant),
+              warpBinReduce(k+1 == subOctant),
+              warpBinReduce(k+2 == subOctant),
+              warpBinReduce(k+3 == subOctant));
+          if (laneIdx == 0) 
+          {
+            int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
+            value.x += sum.x;
+            value.y += sum.y;
+            value.z += sum.z;
+            value.w += sum.w;
+            *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
+          }
+        }
+        cntr -= sum;
+      }
+    }
+  }
+#endif
   __syncthreads();
 
   if (warpIdx >= 8) return;
@@ -1384,10 +1481,8 @@ static __global__ void buildOctree(
 
   dim3 grid, block;
   computeGridAndBlockSize(grid, block, n);
-  cudaStream_t stream;
-  cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 #if 1
-  buildOctant<NLEAF,T,true><<<grid, block,0,stream>>>
+  buildOctant<NLEAF,T,true><<<grid, block>>>
     (*domain, 0, 0, 0, octCounterN, ptcl, buff);
   cudaDeviceSynchronize();
 #endif
