@@ -645,9 +645,13 @@ static __global__ void buildOctant(
 
     p4octant = (mask & p4octant) + ((~mask) & 0xF);
 
+    int cntr = 32;
+
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
     {
+      if (cntr == 0) break;
+
       const int2 offset = warpBinExclusiveScan(p4octant == octant);
 
       if (offset.y > 0)
@@ -683,6 +687,7 @@ static __global__ void buildOctant(
             *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
           }
         }
+        cntr -= offset.y;
       }
 
     }
