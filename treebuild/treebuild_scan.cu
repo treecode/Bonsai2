@@ -1310,17 +1310,6 @@ static __global__ void countAtRootNode(
       atomicAdd(&octCounter[8+k],np);
   }
 
-#if 0
-  __shared__ bool lastBlock;
-  __threadfence();
-  if (threadIdx.x == 0)
-  {
-    const int ticket = atomicInc((unsigned int*)octCounter, gridDim.x);
-    lastBlock = (ticket == gridDim.x-1);
-  };
-
-  __syncthreads();
-#endif
 }
 
 template<int NLEAF, typename T>
