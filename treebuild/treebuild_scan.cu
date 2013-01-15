@@ -293,14 +293,11 @@ static __global__ void buildOctantSingle(
   int cellCounter = __shfl(data, 8+8+warpIdx, WARP_SIZE);
 
   /* each of the 8 warps are responsible for each of the octant */
-  if (level > 0)
-    box = ChildBox(box, octant2process);
+  box = ChildBox(box, octant2process);
   const Box<T> childBox = ChildBox(box, warpIdx);
 
   /* counter in shmem for each of the octant */
   int nChildren[8] = {0};
-
-  assert(blockIdx.x == 0);
 
   __shared__ Particle4<T> dataX[8*WARP_SIZE];
 
@@ -321,23 +318,6 @@ static __global__ void buildOctantSingle(
 
       Particle4<T> p4 = dataX[locid];
 
-#if 0          /* sanity check, check on the fly that tree structure is corrent */
-      { 
-        if (box.centre.x - box.hsize > p4.x ||
-            box.centre.y - box.hsize > p4.y ||
-            box.centre.z - box.hsize > p4.z ||
-            box.centre.x + box.hsize < p4.x ||
-            box.centre.y + box.hsize < p4.y ||
-            box.centre.z + box.hsize < p4.z)
-        {
-          printf("CELL, level= %d  pos= %g %g %g   c= %g %g %g  hsize= %g\n", level,
-              p4.x, p4.y,p4.z,
-              box.centre.x, box.centre.y, box.centre.z, box.hsize);
-          assert(0);
-        }
-      }
-#endif
-
       /* use prefix sums to compute offset to where scatter particles */
       const int     use = mask && (p4.get_oct() == warpIdx);
       const int2 offset = warpBinExclusiveScan(use);  /* x is write offset, y is element count */
@@ -348,11 +328,11 @@ static __global__ void buildOctantSingle(
         cellCounter += offset.y;
 
         int subOctant = -1;
+        const int  p4subOctant = Octant(childBox.centre, Position<T>(p4.x(),p4.y(),p4.z()));
+        p4.set_oct(p4subOctant);
         if (use)
         {
-          const Position<T> pos(p4.x(),p4.y(),p4.z());
-          subOctant = Octant(childBox.centre, pos);
-          p4.set_oct(subOctant);
+          subOctant = p4subOctant;
           buff[addrB+offset.x] = p4;         /* float4 vector stores   */
         }
 
@@ -365,23 +345,18 @@ static __global__ void buildOctantSingle(
     __syncthreads();
   }
   /* done processing particles, store counts atomically in gmem */
-  int (*nPtclChild)[8] = (int (*)[8])dataX;
 
-  if (laneIdx == 0)
-  {
+  int nSubCell;
 #pragma unroll
-    for (int k = 0; k < 8; k++)
-      nPtclChild[warpIdx][k] = nChildren[k];
-  }
-
-  /* number of particles in each cell's subcells */
-  const int nSubCell = laneIdx < 8 ? nPtclChild[warpIdx][laneIdx] : 0;
+  for (int k = 0; k < 8; k++)
+    if (laneIdx == k)
+      nSubCell = nChildren[k];
 
   /* last block finished, analysis of the data and schedule new kernel for children */
 
   __syncthreads();  /* must be present, otherwise race conditions occurs between parent & children */
 
-  int *shmem = &nPtclChild[0][0];
+  int *shmem = (int*)dataX; 
   if (warpIdx == 0)
     shmem[laneIdx] = 0;
 
