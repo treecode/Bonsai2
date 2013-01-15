@@ -294,7 +294,9 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
 
 
 template<int NLEAF, typename T>
-static __global__ void buildOctantSingle(
+static __global__ void
+__launch_bounds__( 256, 4)
+buildOctantSingle(
     Box<T> box,
     const int cellParentIndex,
     const int cellIndexBase,
@@ -557,7 +559,9 @@ static __global__ void buildOctantSingle(
 /****** this is the main functions that build the tree recursively *******/
 
 template<int NLEAF, typename T, bool STOREIDX>
-static __global__ void buildOctant(
+static __global__ void 
+__launch_bounds__( 256, 4)
+buildOctant(
     Box<T> box,
     const int cellParentIndex,
     const int cellIndexBase,
@@ -796,12 +800,19 @@ static __global__ void buildOctant(
               warpBinReduce(k+3 == subOctant));
           if (laneIdx == 0) 
           {
+#if 1
             int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
             value.x += sum.x;
             value.y += sum.y;
             value.z += sum.z;
             value.w += sum.w;
             *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
+#else
+            nShChildrenFine[warpIdx][octant][k+0] += sum.x;
+            nShChildrenFine[warpIdx][octant][k+1] += sum.y;
+            nShChildrenFine[warpIdx][octant][k+2] += sum.z;
+            nShChildrenFine[warpIdx][octant][k+3] += sum.w;
+#endif
           }
         }
         cntr -= sum;
