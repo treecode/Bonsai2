@@ -295,7 +295,7 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
 
 template<int NLEAF, typename T>
 static __global__ void
-__launch_bounds__( 256, 4)
+__launch_bounds__( 256, 8)
 buildOctantSingle(
     Box<T> box,
     const int cellParentIndex,
@@ -560,7 +560,7 @@ buildOctantSingle(
 
 template<int NLEAF, typename T, bool STOREIDX>
 static __global__ void 
-__launch_bounds__( 256, 4)
+__launch_bounds__( 256, 8)
 buildOctant(
     Box<T> box,
     const int cellParentIndex,
@@ -681,7 +681,7 @@ buildOctant(
       if (sum > 0)
       {
         const int subOctant = p4octant == octant ? p4.get_oct() : -1;
-#if 1  /* why this works, but #else doesn't... compiler bug ? */
+#if 0  /* why this works, but #else doesn't... compiler bug ? */
 #pragma unroll
         for (int k = 0; k < 8; k++)
         {
@@ -690,23 +690,25 @@ buildOctant(
             nShChildrenFine[warpIdx][octant][k] += sum;
         }
 #else
-#pragma unroll
-        for (int k = 0; k < 8; k += 4)
+        int4 value1 = {0};
+        int4 value2 = {0};
+        if (laneIdx == 0) 
         {
-          const int4 sum = make_int4(
-              warpBinReduce(k   == subOctant),
-              warpBinReduce(k+1 == subOctant),
-              warpBinReduce(k+2 == subOctant),
-              warpBinReduce(k+3 == subOctant));
-          if (laneIdx == 0) 
-          {
-            int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
-            value.x += sum.x;
-            value.y += sum.y;
-            value.z += sum.z;
-            value.w += sum.w;
-            *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
-          }
+          value1 = *(int4*)&nShChildrenFine[warpIdx][octant][0];
+          value2 = *(int4*)&nShChildrenFine[warpIdx][octant][4];
+        }
+        value1.x += warpBinReduce(0 == subOctant);
+        value1.y += warpBinReduce(1 == subOctant);
+        value1.z += warpBinReduce(2 == subOctant);
+        value1.w += warpBinReduce(3 == subOctant);
+        value2.x += warpBinReduce(4 == subOctant);
+        value2.y += warpBinReduce(5 == subOctant);
+        value2.z += warpBinReduce(6 == subOctant);
+        value2.w += warpBinReduce(7 == subOctant);
+        if (laneIdx == 0) 
+        {
+          *(int4*)&nShChildrenFine[warpIdx][octant][0] = value1;
+          *(int4*)&nShChildrenFine[warpIdx][octant][4] = value2;
         }
 #endif
         cntr -= sum;
