@@ -295,7 +295,7 @@ static __device__ __forceinline__ int warpBinReduce(const bool p)
 
 template<int NLEAF, typename T>
 static __global__ void
-__launch_bounds__( 256, 8)
+//__launch_bounds__( 256, 8)
 buildOctantSingle(
     Box<T> box,
     const int cellParentIndex,
@@ -371,8 +371,8 @@ buildOctantSingle(
       }
     }
 
-    __syncthreads();
   }
+  __syncthreads();
   /* done processing particles, store counts atomically in gmem */
 
   int nSubCell;
@@ -560,7 +560,7 @@ buildOctantSingle(
 
 template<int NLEAF, typename T, bool STOREIDX>
 static __global__ void 
-__launch_bounds__( 256, 8)
+//__launch_bounds__( 256, 8)
 buildOctant(
     Box<T> box,
     const int cellParentIndex,
@@ -630,13 +630,14 @@ buildOctant(
     
     p4octant = i+threadIdx.x < nEnd ? p4octant : 0xF; 
 
+    /* compute suboctant of the octant into which particle will fall */
     if (p4octant < 8)
     {
       const int p4subOctant = Octant(shChildBox[p4octant].centre, Position<T>(p4.x(), p4.y(), p4.z()));
       p4.set_oct(p4subOctant);
     }
 
-    /******** test here *********/
+    /* compute number of particles in each of the octants that will be processed by thead block */
     int np = 0;
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
@@ -646,10 +647,12 @@ buildOctant(
         np = sum;
     }
 
+    /* increment atomic counters in a single instruction for thread-blocks to participated */
     int addrB0;
     if (laneIdx < 8)
       addrB0 = atomicAdd(&octCounter[8+8+laneIdx], np);
 
+    /* compute addresses where to write data */
     int cntr = 32;
     int addrW = -1;
 #pragma unroll
@@ -667,11 +670,12 @@ buildOctant(
         if (cntr == 0) break;
       }
     }
-    /*************** end test here ************/
-          
+         
+    /* write the data in a single instruction */ 
     if (addrW >= 0)
       buff[addrW] = p4;
 
+    /* count how many particles in suboctants in each of the octants */
     cntr = 32;
 #pragma unroll
     for (int octant = 0; octant < 8; octant++)
@@ -681,7 +685,7 @@ buildOctant(
       if (sum > 0)
       {
         const int subOctant = p4octant == octant ? p4.get_oct() : -1;
-#if 0  /* why this works, but #else doesn't... compiler bug ? */
+#if 0  /* why this works, but #else sometimes doesn't... compiler bug ? */
 #pragma unroll
         for (int k = 0; k < 8; k++)
         {
@@ -689,26 +693,24 @@ buildOctant(
           if (laneIdx == 0) 
             nShChildrenFine[warpIdx][octant][k] += sum;
         }
-#else
-        int4 value1 = {0};
-        int4 value2 = {0};
-        if (laneIdx == 0) 
+#else   /* tuned loop to minimize memory access insutrctions */
+#pragma unroll
+        for (int k = 0; k < 8; k += 4)
         {
-          value1 = *(int4*)&nShChildrenFine[warpIdx][octant][0];
-          value2 = *(int4*)&nShChildrenFine[warpIdx][octant][4];
-        }
-        value1.x += warpBinReduce(0 == subOctant);
-        value1.y += warpBinReduce(1 == subOctant);
-        value1.z += warpBinReduce(2 == subOctant);
-        value1.w += warpBinReduce(3 == subOctant);
-        value2.x += warpBinReduce(4 == subOctant);
-        value2.y += warpBinReduce(5 == subOctant);
-        value2.z += warpBinReduce(6 == subOctant);
-        value2.w += warpBinReduce(7 == subOctant);
-        if (laneIdx == 0) 
-        {
-          *(int4*)&nShChildrenFine[warpIdx][octant][0] = value1;
-          *(int4*)&nShChildrenFine[warpIdx][octant][4] = value2;
+          const int4 sum = make_int4(
+              warpBinReduce(k+0 == subOctant),
+              warpBinReduce(k+1 == subOctant),
+              warpBinReduce(k+2 == subOctant),
+              warpBinReduce(k+3 == subOctant));
+          if (laneIdx == 0)
+          {
+            int4 value = *(int4*)&nShChildrenFine[warpIdx][octant][k];
+            value.x += sum.x;
+            value.y += sum.y;
+            value.z += sum.z;
+            value.w += sum.w;
+            *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
+          }
         }
 #endif
         cntr -= sum;
@@ -720,26 +722,25 @@ buildOctant(
   if (warpIdx >= 8) return;
 
 
-  if (warpIdx < 8)
 #pragma unroll
-    for (int k = 0; k < 8; k += 4)
+  for (int k = 0; k < 8; k += 4)
+  {
+    int4 nSubOctant = laneIdx < NWARPS ? (*(int4*)&nShChildrenFine[laneIdx][warpIdx][k]) : make_int4(0,0,0,0);
+#pragma unroll
+    for (int i = NWARPS2-1; i >= 0; i--)
     {
-      int4 nSubOctant = laneIdx < NWARPS ? (*(int4*)&nShChildrenFine[laneIdx][warpIdx][k]) : make_int4(0,0,0,0);
-#pragma unroll
-      for (int i = NWARPS2-1; i >= 0; i--)
-      {
-        nSubOctant.x += __shfl_xor(nSubOctant.x, 1<<i, NWARPS);
-        nSubOctant.y += __shfl_xor(nSubOctant.y, 1<<i, NWARPS);
-        nSubOctant.z += __shfl_xor(nSubOctant.z, 1<<i, NWARPS);
-        nSubOctant.w += __shfl_xor(nSubOctant.w, 1<<i, NWARPS);
-      }
-      if (laneIdx == 0)
-        *(int4*)&nShChildren[warpIdx][k] = nSubOctant;
+      nSubOctant.x += __shfl_xor(nSubOctant.x, 1<<i, NWARPS);
+      nSubOctant.y += __shfl_xor(nSubOctant.y, 1<<i, NWARPS);
+      nSubOctant.z += __shfl_xor(nSubOctant.z, 1<<i, NWARPS);
+      nSubOctant.w += __shfl_xor(nSubOctant.w, 1<<i, NWARPS);
     }
+    if (laneIdx == 0)
+      *(int4*)&nShChildren[warpIdx][k] = nSubOctant;
+  }
 
   __syncthreads();
 
-  if (laneIdx < 8 && warpIdx < 8)
+  if (laneIdx < 8)
     if (nShChildren[warpIdx][laneIdx] > 0)
       atomicAdd(&octCounter[8+16+warpIdx*8 + laneIdx], nShChildren[warpIdx][laneIdx]);
 
@@ -885,7 +886,7 @@ buildOctant(
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
-#if NWARPS==88
+#if defined(FASTMODE) && NWARPS==8
       if (nCellmax <= block.x)
       {
         grid.x = 1;
@@ -1511,9 +1512,15 @@ void testTree(const int n, const unsigned int seed)
 
   /* prefer shared memory for kernels */
 
+#if 0
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferShared));
+#else
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferEqual));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferEqual));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferEqual));
+#endif
 
   /**** launch tree building kernel ****/
 
