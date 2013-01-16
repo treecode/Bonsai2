@@ -1415,7 +1415,7 @@ static __global__ void buildOctree(
 /*****   DRIVING ROUTINES   *****/
 /********************************/
 
-  template<int NLEAF, typename T>
+  template<int NLEAF, typename T, bool PREFERSHARED>
 void testTree(const int n, const unsigned int seed)
 {
   typedef typename vec<4,T>::type T4;
@@ -1512,15 +1512,18 @@ void testTree(const int n, const unsigned int seed)
 
   /* prefer shared memory for kernels */
 
-#ifdef PREFERSHARED
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferShared));
-#else
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferEqual));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferEqual));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferEqual));
-#endif
+  if (PREFERSHARED)
+  {
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferShared));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferShared));
+  }
+  else
+  {
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferEqual));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferEqual));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferEqual));
+  }
 #if 0
   CUDA_SAFE_CALL(cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeFourByte));
 #else
@@ -1598,6 +1601,14 @@ int main(int argc, char * argv [])
   const int NLEAF = NPERLEAF;
 #endif
 
-  testTree<NLEAF, real>(n, argc > 2 ? atoi(argv[2]) : 19810614);
+  if (argc > 2)
+  {
+    if (atoi(argv[2]) == 0)
+      testTree<NLEAF, real, false>(n, argc > 3 ? atoi(argv[3]) : 19810614);
+    else
+      testTree<NLEAF, real, true>(n, argc > 3 ? atoi(argv[3]) : 19810614);
+  }
+  else
+    testTree<NLEAF, real, false>(n, argc > 3 ? atoi(argv[3]) : 19810614);
 
 };

@@ -17,9 +17,10 @@ or
 nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=32  -DNWARPS_OCTREE2=5
 
 /* warning: possible compiler bug, cuda 5.0 */
-using PreferShared sometimes produces erroenous results:
-$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 -DPREFERSHARED
-$ ./treebuild 20000000
+using referShared sometimes produces erroenous results:
+$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 
+(2nd argument controls preferShared:  0-disable and use preferEqual, 1-enable)
+$ ./treebuild 20000000  1
  nptcl  = 20000000
  nb_leaf= 19999556
  nnodes = 596463
@@ -29,8 +30,7 @@ $ ./treebuild 20000000
  buildOctree done in 0.314011 sec : 63.692 Mptcl/sec
 
 using PreferEqual produces correct results:
-$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 
-$ ./treebuild 20000000
+$ ./treebuild 20000000 0
  nptcl  = 20000000
  nb_leaf= 20000000
  nnodes = 596463
