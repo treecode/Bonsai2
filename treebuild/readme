@@ -16,38 +16,26 @@ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc
 or
 nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DPLUMMER -DNPERLEAF=16 -maxrregcount=32  -DNWARPS_OCTREE2=5
 
-/* warrning: possible compiler bug, cuda 5.0 */
-steps:
-$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 -DFP32   -DNWARPS_OCTREE2=4
+/* warning: possible compiler bug, cuda 5.0 */
+using PreferShared sometimes produces erroenous results:
+$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 -DPREFERSHARED
+$ ./treebuild 20000000
+ nptcl  = 20000000
+ nb_leaf= 19999556
+ nnodes = 596463
+ nleaves= 4041690
+ ncells=  4638153
+ nlevels= 15
+ buildOctree done in 0.314011 sec : 63.692 Mptcl/sec
+
+using PreferEqual produces correct results:
+$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 
 $ ./treebuild 20000000
  nptcl  = 20000000
  nb_leaf= 20000000
  nnodes = 596463
  nleaves= 4041848
  ncells=  4638311
- nlevels= 15 
- buildOctree done in 0.393842 sec : 50.7818 Mptcl/sec
-$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 -DFP32   -DNWARPS_OCTREE2=3
-$ ./treebuild 20000000
- nptcl  = 20000000
- nb_leaf= 19993103
- nnodes = 596291
- nleaves= 4039839
- ncells=  4636130
  nlevels= 15
- buildOctree done in 0.316256 sec : 63.2399 Mptcl/sec
-
-/* wrong result, while it should be the same */
-
-increasing maxrregcount to 48 (to avoid spills produces correct result)
-$ nvcc -O3 -o treebuild  treebuild_scan.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=48 -DFP32   -DNWARPS_OCTREE2=3
- nptcl  = 20000000
- nb_leaf= 20000000
- nnodes = 596463
- nleaves= 4041848
- ncells=  4638311
- nlevels= 15
- buildOctree done in 0.35733 sec : 55.9707 Mptcl/sec
-
-/* possible compiler bug ? */
+ buildOctree done in 0.340169 sec : 58.7943 Mptcl/sec
 

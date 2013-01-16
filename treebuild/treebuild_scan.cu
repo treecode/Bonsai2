@@ -1512,7 +1512,7 @@ void testTree(const int n, const unsigned int seed)
 
   /* prefer shared memory for kernels */
 
-#if 0
+#ifdef PREFERSHARED
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctant      <NLEAF,T,false>, cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferShared));
