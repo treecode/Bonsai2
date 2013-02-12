@@ -1453,7 +1453,7 @@ static __global__ void buildOctree(
 #if 1
   buildOctant<NLEAF,T,true><<<grid, block>>>
     (*domain, 0, 0, 0, octCounterN, ptcl, buff);
-  cudaDeviceSynchronize();
+  assert(cudaDeviceSynchronize() == cudaSuccess);
 #endif
 
   printf(" nptcl  = %d\n", n);
@@ -1578,7 +1578,7 @@ void testTree(const int n, const unsigned int seed)
   d_cellDataList.alloc(cell_max);
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
 
-  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,8192);
+  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
 
   /* prefer shared memory for kernels */
 
