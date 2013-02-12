@@ -106,6 +106,12 @@ __device__ unsigned int nleaves = 0;
 __device__ unsigned int nlevels = 0;
 __device__ unsigned int nbodies_leaf = 0;
 __device__ unsigned int ncells = 0;
+__device__ unsigned int n_scheduled = 0;
+__device__ unsigned int n_executed = 0;
+__device__ unsigned int n_running = 0;
+__device__ unsigned int n_on_fly = 0;
+__device__ unsigned int n_in_que = 0;
+__device__ unsigned int n_in_que_max = 0;
 
 
 __device__   int *memPool;
@@ -306,6 +312,12 @@ buildOctantSingle(
     Particle4<T> *buff,
     const int level)
 {
+  if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+  {
+    atomicAdd(&n_executed,1);
+    const int nrun = atomicAdd(&n_running, 1);
+    atomicMax(&n_on_fly, nrun+1);
+  }
   typedef typename vec<4,T>::type T4;
   const int laneIdx = threadIdx.x & (WARP_SIZE-1);
   const int warpIdx = threadIdx.x >> WARP_SIZE2;
@@ -494,14 +506,28 @@ buildOctantSingle(
     {
       dim3 grid, block;
       computeGridAndBlockSize(grid, block, nCellmax);
+#if 0
       cudaStream_t stream;
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
       grid.x = 1;
+      atomicAdd(&n_scheduled,1);
+      atomicAdd(&n_in_que, 1);
+      atomicMax(&n_in_que_max, n_in_que);
       buildOctantSingle<NLEAF,T><<<grid,block,0,stream>>>
         (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
          octant_mask, octCounterNbase, buff, ptcl, level+1);
+#else
+      grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
+      grid.x = 1;
+      atomicAdd(&n_scheduled,1);
+      atomicAdd(&n_in_que, 1);
+      atomicMax(&n_in_que_max, n_in_que);
+      buildOctantSingle<NLEAF,T><<<grid,block>>>
+        (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+         octant_mask, octCounterNbase, buff, ptcl, level+1);
+#endif
     }
   }
 
@@ -554,6 +580,11 @@ buildOctantSingle(
 
   }
 
+  if (threadIdx.x == 0 && blockIdx.y == 0)
+  {
+    atomicSub(&n_running, 1);
+    atomicSub(&n_in_que, 1);
+  }
 }
 
 /****** this is the main functions that build the tree recursively *******/
@@ -571,6 +602,12 @@ buildOctant(
     Particle4<T> *buff,
     const int level = 0)
 {
+  if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+  {
+    atomicAdd(&n_executed,1);
+    const int nrun = atomicAdd(&n_running, 1) + 1;
+    atomicMax(&n_on_fly, nrun);
+  }
   typedef typename vec<4,T>::type T4;
   /* compute laneIdx & warpIdx for each of the threads:
    *   the thread block contains only 8 warps
@@ -685,15 +722,6 @@ buildOctant(
       if (sum > 0)
       {
         const int subOctant = p4octant == octant ? p4.get_oct() : -1;
-#if 0  /* why this works, but #else sometimes doesn't... compiler bug ? */
-#pragma unroll
-        for (int k = 0; k < 8; k++)
-        {
-          const int sum = warpBinReduce(k == subOctant);
-          if (laneIdx == 0) 
-            nShChildrenFine[warpIdx][octant][k] += sum;
-        }
-#else   /* tuned loop to minimize memory access insutrctions */
 #pragma unroll
         for (int k = 0; k < 8; k += 4)
         {
@@ -712,7 +740,6 @@ buildOctant(
             *(int4*)&nShChildrenFine[warpIdx][octant][k] = value;
           }
         }
-#endif
         cntr -= sum;
       }
     }
@@ -882,10 +909,14 @@ buildOctant(
     {
       dim3 grid, block;
       computeGridAndBlockSize(grid, block, nCellmax);
+#if 0
       cudaStream_t stream;
       cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
       grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
+      atomicAdd(&n_scheduled,1);
+      atomicAdd(&n_in_que, 1);
+      atomicMax(&n_in_que_max, n_in_que);
 #if defined(FASTMODE) && NWARPS==8
       if (nCellmax <= block.x)
       {
@@ -899,6 +930,25 @@ buildOctant(
         buildOctant<NLEAF,T,false><<<grid,block,0,stream>>>
           (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
            octant_mask, octCounterNbase, buff, ptcl, level+1);
+#else
+      grid.y = nSubNodes.y;  /* each y-coordinate of the grid will be busy for each parent cell */
+      atomicAdd(&n_scheduled,1);
+      atomicAdd(&n_in_que, 1);
+      atomicMax(&n_in_que_max, n_in_que);
+#if defined(FASTMODE) && NWARPS==8
+      if (nCellmax <= block.x)
+      {
+        grid.x = 1;
+        buildOctantSingle<NLEAF,T><<<grid,block>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+      }
+      else
+#endif
+        buildOctant<NLEAF,T,false><<<grid,block>>>
+          (box, cellIndexBase+blockIdx.y, cellFirstChildIndex,
+           octant_mask, octCounterNbase, buff, ptcl, level+1);
+#endif
     }
   }
 
@@ -910,7 +960,6 @@ buildOctant(
   {
     if (laneIdx == 0)
     {
-      assert(nEnd1 - nBeg1 <= NLEAF);
       atomicAdd(&nleaves,1);
       atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
       const CellData leafData(cellIndexBase+blockIdx.y, nBeg1, nEnd1);
@@ -948,6 +997,12 @@ buildOctant(
           ptcl[i] = vel;
         }
     }
+  }
+
+  if (threadIdx.x == 0 && blockIdx.y == 0)
+  {
+    atomicSub(&n_running, 1);
+    atomicSub(&n_in_que, 1);
   }
 }
 
@@ -1382,6 +1437,13 @@ static __global__ void buildOctree(
   nlevels = 0;
   ncells  = 0;
   nbodies_leaf = 0;
+  n_scheduled = 1;
+  n_executed  = 0;
+  n_running  = 0;
+  n_on_fly = 0;
+  n_in_que = 1;
+  n_in_que_max = 0;
+
 
   octCounterN[1] = 0;
   octCounterN[2] = n;
@@ -1400,6 +1462,12 @@ static __global__ void buildOctree(
   printf(" nleaves= %d\n", nleaves);
   printf(" ncells=  %d\n",  ncells);
   printf(" nlevels= %d\n", nlevels);
+  printf(" n_scheduled = %d\n", n_scheduled);
+  printf(" n_executed = %d\n", n_executed);
+  printf(" n_running = %d\n", n_running);
+  printf(" n_on_fly = %d\n", n_on_fly);
+  printf(" n_que     = %d\n", n_in_que);
+  printf(" n_que_max = %d\n", n_in_que_max);
 
   if (ncells_return != NULL)
     *ncells_return = ncells;
@@ -1509,6 +1577,8 @@ void testTree(const int n, const unsigned int seed)
   cuda_mem<CellData> d_cellDataList;
   d_cellDataList.alloc(cell_max);
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
+
+  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,8192);
 
   /* prefer shared memory for kernels */
 
