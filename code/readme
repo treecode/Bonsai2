@@ -1,0 +1,2 @@
+ nvcc -O3 -o treebuild treebuild.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 
+ nvcc -O3 -o treebuild treebuild.cu -arch=sm_35 -Xptxas=-v -lcudadevrt -rdc=true -g  -DNPERLEAF=16  -DPLUMMER  -maxrregcount=32 -DFATMODE
