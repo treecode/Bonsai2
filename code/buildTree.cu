@@ -4,6 +4,8 @@
 #define NWARPS2 NWARPS_OCTREE2
 #define NWARPS  (1<<NWARPS2)
 
+#include <thrust/device_ptr.h>
+#include <thrust/sort.h>
 
 namespace treeBuild
 {
@@ -736,6 +738,49 @@ namespace treeBuild
       delete [] octCounter;
       delete [] octCounterN;
     }
+
+
+  static __global__ void
+    get_cell_levels(const int n, const CellData cellList[], CellData cellListOut[], int key[], int value[])
+    {
+      const int idx = blockIdx.x*blockDim.x + threadIdx.x;
+      if (idx < n) return;
+
+      const CellData cell = cellList[idx];
+      key  [idx] = cell.level();
+      value[idx] = idx;
+      cellListOut[idx] = cell;
+    }
+
+  static __global__ void
+    write_newIdx(const int n, const int value[], int moved_to_idx[])
+    {
+      const int newIdx = blockIdx.x*blockDim.x + threadIdx.x;
+      if (newIdx < n) return;
+
+      const int oldIdx = value[newIdx];
+      moved_to_idx[oldIdx] = newIdx;
+    }
+
+  static __global__ void
+    shuffle_cells(const int n, const int value[], const int moved_to_idx[], const CellData cellListIn[], CellData cellListOut[])
+    {
+      const int idx = blockIdx.x*blockDim.x + threadIdx.x;
+      if (idx < n) return;
+
+      const int mapIdx = value[idx];
+      CellData cell = cellListIn[mapIdx];
+#if 0
+      const int firstOld = cell.first();
+      assert(firstOld >= 0);
+      assert(firstOld < n);
+      const int firstNew = moved_to_idx[firstOld];
+      assert(firstNew >= 0);
+      assert(firstNew < n);
+      cell.update_first(firstNew);
+#endif
+      cellListOut[idx] = cell;
+    }
 }
 
 
@@ -786,6 +831,33 @@ void Treecode<real_t, NLEAF>::buildTree()
     fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
     std::swap(d_ptclPos_tmp.ptr, d_ptclVel.ptr);
   }
+
+  /* sort nodes by level */
+#if 1
+  {
+    int ncells;
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&ncells, treeBuild::ncells, sizeof(int)));
+    
+    cudaDeviceSynchronize();
+    const double t0 = rtc();
+    const int nthread = 256;
+    const int nblock  = (ncells-1)/nthread  + 1;
+    treeBuild::get_cell_levels<<<nblock,nthread>>>(ncells, d_cellDataList, d_cellDataList_tmp, d_key, d_value);
+
+    thrust::device_ptr<int> keys_beg(d_key.ptr);
+    thrust::device_ptr<int> keys_end(d_key.ptr + ncells);
+    thrust::device_ptr<int> vals_beg(d_value.ptr);
+
+    thrust::stable_sort_by_key(keys_beg, keys_end, vals_beg); 
+
+    treeBuild::write_newIdx <<<nblock,nthread>>>(ncells, d_value, d_key);
+    treeBuild::shuffle_cells<<<nblock,nthread>>>(ncells, d_value, d_key, d_cellDataList_tmp, d_cellDataList);
+    kernelSuccess("shuffle");
+    const double t1 = rtc();
+    const double dt = t1 - t0;
+    fprintf(stderr, " shuffle done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
+  }
+#endif
 
 #if 1  
   { /* print tree structure */

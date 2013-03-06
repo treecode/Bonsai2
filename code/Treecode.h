@@ -26,9 +26,9 @@ struct CellData
 {
   private:
     enum {NLEAF_SHIFT = 29};
-    enum {NLEAF_MASK  = (0x7U << NLEAF_SHIFT)};
+    enum {NLEAF_MASK  = ~(0x7U << NLEAF_SHIFT)};
     enum {LEVEL_SHIFT = 27};
-    enum {LEVEL_MASK  = (0x1FU << LEVEL_SHIFT)};
+    enum {LEVEL_MASK  = ~(0x1FU << LEVEL_SHIFT)};
     uint4 packed_data;
   public:
     __device__ CellData(
@@ -54,6 +54,11 @@ struct CellData
 
     __host__ __device__ bool isLeaf() const {return packed_data.y == 0xFFFFFFFF;}
     __host__ __device__ bool isNode() const {return !isLeaf();}
+
+    __host__ __device__ void update_first(const int first) 
+    {
+      packed_data.y = first | ((unsigned int)n() << NLEAF_SHIFT);
+    }
 };
 
 template<typename real_t, int NLEAF>
@@ -69,7 +74,8 @@ struct Treecode
 
   int node_max, cell_max, stack_size;
   cuda_mem<int>  d_stack_memory_pool;
-  cuda_mem<CellData> d_cellDataList;
+  cuda_mem<CellData> d_cellDataList, d_cellDataList_tmp;
+  cuda_mem<int>      d_key, d_value;
 
   Treecode() 
   {
@@ -96,6 +102,9 @@ struct Treecode
     cell_max = nPtcl;
     fprintf(stderr, "celldata= %g MB \n", cell_max*sizeof(CellData)/1024.0/1024.0);
     d_cellDataList.alloc(cell_max);
+    d_cellDataList_tmp.alloc(cell_max);
+    d_key.alloc(cell_max);
+    d_value.alloc(cell_max);
   };
 
   void ptcl_d2h()
