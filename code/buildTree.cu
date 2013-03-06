@@ -4,35 +4,6 @@
 #define NWARPS2 NWARPS_OCTREE2
 #define NWARPS  (1<<NWARPS2)
 
-struct CellData
-{
-  private:
-    enum {NLEAF_SHIFT = 29};
-    enum {NLEAF_MASK  = (0x1FU << NLEAF_SHIFT)};
-    uint4 packed_data;
-  public:
-    __device__ CellData(
-        const unsigned int parentCell,
-        const unsigned int nBeg,
-        const unsigned int nEnd,
-        const unsigned int first = 0xFFFFFFFF,
-        const unsigned int n = 0xFFFFFFFF)
-    {
-      int packed_firstleaf_n = 0xFFFFFFFF;
-      if (n != 0xFFFFFFFF)
-        packed_firstleaf_n = first | ((unsigned int)n << NLEAF_SHIFT);
-      packed_data = make_uint4(parentCell, packed_firstleaf_n, nBeg, nEnd);
-    }
-
-    __device__ int n()      const {return packed_data.y >> NLEAF_SHIFT;}
-    __device__ int first()  const {return packed_data.y  & NLEAF_MASK;}
-    __device__ int parent() const {return packed_data.x;}
-    __device__ int pbeg()   const {return packed_data.z;}
-    __device__ int pend()   const {return packed_data.w;}
-
-    __device__ bool isLeaf() const {return packed_data.y == 0xFFFFFFFF;}
-    __device__ bool isNode() const {return !isLeaf();}
-};
 
 namespace treeBuild
 {
@@ -464,7 +435,7 @@ namespace treeBuild
       if (threadIdx.x == 0 && nSubNodes.y > 0)
       {
         shmem[16+8] = atomicAdd(&nnodes,nSubNodes.y);
-#if 0   /* temp solution, a better one is to use RingBuffer */
+#if 1   /* temp solution, a better one is to use RingBuffer */
         assert(shmem[16+8] < d_node_max);
 #endif
       }
@@ -474,6 +445,9 @@ namespace treeBuild
       if (threadIdx.x == 0 && nChildrenCell > 0)
       {
         const int cellFirstChildIndex = atomicAdd(&ncells, nChildrenCell);
+#if 1
+        assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
+#endif
         /*** keep in mind, the 0-level will be overwritten ***/
         const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
         cellDataList[cellIndexBase + blockIdx.y] = cellData;
@@ -770,51 +744,24 @@ void Treecode<real_t, NLEAF>::buildTree()
 {
   /* compute bounding box */
 
-  cuda_mem< Box<real_t> >  d_domain;
-  d_domain.alloc(1);
   {
     const int NTHREAD2 = 8;
     const int NTHREAD  = 1<<NTHREAD2;
     const int NBLOCK   = NTHREAD;
 
-    cuda_mem< Position<real_t> > minmax;
-    minmax.alloc(NBLOCK*2);
-
+    assert(2*NBLOCK <= 2048);  /* see Treecode constructor for d_minmax allocation */
     cudaDeviceSynchronize();
     const double t0 = rtc();
     treeBuild::computeBoundingBox<NTHREAD2,real_t><<<NBLOCK,NTHREAD,NTHREAD*sizeof(float2)>>>
-      (nPtcl, minmax, d_domain, d_ptclPos);
+      (nPtcl, d_minmax, d_domain, d_ptclPos);
     kernelSuccess("cudaDomainSize");
     const double dt = rtc() - t0;
     fprintf(stderr, " cudaDomainSize done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
   }
-#if 0
-  host_mem< Box<real_t> >  h_domain;
-  h_domain.alloc(1);
-  d_domain.d2h(h_domain);
-  fprintf(stderr, "  %g %g %g  h= %g \n", 
-      h_domain[0].centre.x,
-      h_domain[0].centre.y,
-      h_domain[0].centre.z,
-      h_domain[0].hsize);
-#endif
-
 
   /*** build tree ***/
 
-  /*** allocate stack memory ***/
-  const int node_max = nPtcl/10;
-  const int nstack   = (8+8+8+64+8)*node_max;
-  fprintf(stderr, "nstack= %g MB \n", sizeof(int)*nstack/1024.0/1024.0);
-  cuda_mem<int> d_stack_memory_pool;
-  d_stack_memory_pool.alloc(nstack);
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(treeBuild::d_node_max, &node_max, sizeof(int), 0, cudaMemcpyHostToDevice));
-
-  /*** allocate cell memory ***/
-  const int cell_max = nPtcl;
-  fprintf(stderr, "celldata= %g MB \n", cell_max*sizeof(CellData)/1024.0/1024.0);
-  cuda_mem<CellData> d_cellDataList;
-  d_cellDataList.alloc(cell_max);
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(treeBuild::d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
 
   cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
@@ -827,14 +774,8 @@ void Treecode<real_t, NLEAF>::buildTree()
 
   CUDA_SAFE_CALL(cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte));
 
-
-
-  host_mem<int> h_ncells;
-  cuda_mem<int> d_ncells;
-  h_ncells.alloc(1);
-  d_ncells.alloc(1);
   {
-    CUDA_SAFE_CALL(cudaMemset(d_stack_memory_pool,0,nstack*sizeof(int)));
+    CUDA_SAFE_CALL(cudaMemset(d_stack_memory_pool,0,stack_size*sizeof(int)));
     cudaDeviceSynchronize();
     const double t0 = rtc();
     treeBuild::buildOctree<NLEAF,real_t><<<1,1>>>(
