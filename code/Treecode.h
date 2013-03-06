@@ -58,6 +58,8 @@ struct Treecode
   }
 
   void buildTree();
+  void computeMultipoles();
+  void computeForces();
 };
 
 

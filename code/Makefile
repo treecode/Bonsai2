@@ -21,7 +21,9 @@ NVCCFLAGS += -I$(INCLUDEPATH)
 
 CUDAKERNELSPATH = ./
 CUDAKERNELS = treecode.o \
-							treebuild.o
+							buildTree.o \
+							computeMultipoles.o \
+							computeForces.o 
 
 SRCPATH = ./
 SRC = anyoption.cpp
