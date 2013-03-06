@@ -1,5 +1,11 @@
 #pragma once
 
+
+#define WARP_SIZE2 5
+#define WARP_SIZE 32
+
+/**************************************************************/
+
 template<int N, typename T> struct vec;
 template<> struct vec<4,float>  { typedef float4  type; };
 template<> struct vec<4,double> { typedef double4 type; };
@@ -112,6 +118,29 @@ template<> __device__ __forceinline__ int Particle4<double>::set_oct(const int o
   const int idx = get_idx();
   packed_data.w = (unsigned long long)((idx << 4) | oct);
   return oct;
+}
+
+/**************************************************************/
+
+  template<typename T>
+static __device__ __forceinline__ int Octant(const Position<T> &lhs, const Position<T> &rhs)
+{
+  return 
+    ((lhs.x <= rhs.x) << 0) +
+    ((lhs.y <= rhs.y) << 1) +
+    ((lhs.z <= rhs.z) << 2);
+};
+
+  template<typename T>
+static __device__ __forceinline__ Box<T> ChildBox(const Box<T> &box, const int oct)
+{
+  const T s = T(0.5) * box.hsize;
+  return Box<T>(Position<T>(
+        box.centre.x + s * ((oct&1) ? T(1.0) : T(-1.0)),
+        box.centre.y + s * ((oct&2) ? T(1.0) : T(-1.0)),
+        box.centre.z + s * ((oct&4) ? T(1.0) : T(-1.0))
+        ), 
+      s);
 }
 
 /**************************************************************/
