@@ -1297,6 +1297,10 @@ static __global__ void computeBoundingBox(
     {
       bmin = shmin[0];
       bmax = shmax[0];
+#if 1     
+      printf("bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);                                     
+      printf("bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);                                     
+#endif    
       const Position<T> cvec((bmax.x+bmin.x)*T(0.5), (bmax.y+bmin.y)*T(0.5), (bmax.z+bmin.z)*T(0.5));
       const Position<T> hvec((bmax.x-bmin.x)*T(0.5), (bmax.y-bmin.y)*T(0.5), (bmax.z-bmin.z)*T(0.5));
       const T h = fmax(hvec.z, fmax(hvec.y, hvec.x));

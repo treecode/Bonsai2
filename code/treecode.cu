@@ -56,18 +56,23 @@ int main(int argc, char * argv[])
     for (int i = 0; i < nPtcl; i++)
     {
       typename Tree::Particle ptclPos, ptclVel;
-      ptclPos.x()    = data. pos[i].x;
-      ptclPos.y()    = data. pos[i].y;
-      ptclPos.z()    = data. pos[i].z;
-      ptclVel.x()    = data. vel[i].x;
-      ptclVel.y()    = data. vel[i].y;
-      ptclVel.z()    = data. vel[i].z;
+      ptclPos.x()    = data.pos[i].x;
+      ptclPos.y()    = data.pos[i].y;
+      ptclPos.z()    = data.pos[i].z;
+
+      ptclVel.x()    = data.vel[i].x;
+      ptclVel.y()    = data.vel[i].y;
+      ptclVel.z()    = data.vel[i].z;
+
       ptclVel.mass() = i; //data.mass[i];
       ptclVel.mass() = data.mass[i];
       ptclPos.mass() = data.mass[i];
+
       mtot += data.mass[i];
+
       tree.h_ptclPos[i] = ptclPos;
       tree.h_ptclVel[i] = ptclVel;
+
       bmin.x = std::min(bmin.x, ptclPos.x());
       bmin.y = std::min(bmin.y, ptclPos.y());
       bmin.z = std::min(bmin.z, ptclPos.z());
@@ -111,7 +116,6 @@ int main(int argc, char * argv[])
   fprintf(stderr, "  bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
 
   tree.ptcl_h2d();
-
   tree.buildTree();
 
   return 0;

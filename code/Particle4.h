@@ -123,7 +123,7 @@ template<> __device__ __forceinline__ int Particle4<double>::set_oct(const int o
 /**************************************************************/
 
   template<typename T>
-static __device__ __forceinline__ int Octant(const Position<T> &lhs, const Position<T> &rhs)
+static __host__ __device__ __forceinline__ int Octant(const Position<T> &lhs, const Position<T> &rhs)
 {
   return 
     ((lhs.x <= rhs.x) << 0) +

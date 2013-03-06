@@ -130,6 +130,8 @@ namespace treeBuild
         }
       }
 
+      __syncthreads();
+
       return sum;
     }
 
@@ -168,6 +170,7 @@ namespace treeBuild
 
       __shared__ bool lastBlock;
       __threadfence();
+      __syncthreads();
 
       if (threadIdx.x == 0)
       {
@@ -192,7 +195,7 @@ namespace treeBuild
 
         if (threadIdx.x == 0)
         {
-#if 0
+#if 1
           printf("bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);
           printf("bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
 #endif
@@ -664,8 +667,8 @@ namespace treeBuild
         if (laneIdx == 0)
           atomicAdd(&octCounter[8+k],np);
       }
-
     }
+
   template<int NLEAF, typename T>
     static __global__ void buildOctree(
         const int n,
@@ -694,6 +697,7 @@ namespace treeBuild
       for (int k = 0; k < 16; k++)
         octCounter[k] = 0;
       countAtRootNode<T><<<256, 256>>>(n, octCounter, *domain, ptcl);
+      assert(cudaGetLastError() == cudaSuccess);
       cudaDeviceSynchronize();
 
       int total = 0;
@@ -778,7 +782,8 @@ void Treecode<real_t, NLEAF>::buildTree()
 
     cudaDeviceSynchronize();
     const double t0 = rtc();
-    treeBuild::computeBoundingBox<NTHREAD2,real_t><<<NBLOCK,NTHREAD,NTHREAD*sizeof(float2)>>>(nPtcl, minmax, d_domain, d_ptclPos);
+    treeBuild::computeBoundingBox<NTHREAD2,real_t><<<NBLOCK,NTHREAD,NTHREAD*sizeof(float2)>>>
+      (nPtcl, minmax, d_domain, d_ptclPos);
     kernelSuccess("cudaDomainSize");
     const double dt = rtc() - t0;
     fprintf(stderr, " cudaDomainSize done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
@@ -821,6 +826,8 @@ void Treecode<real_t, NLEAF>::buildTree()
 #endif
 
   CUDA_SAFE_CALL(cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte));
+
+
 
   host_mem<int> h_ncells;
   cuda_mem<int> d_ncells;
