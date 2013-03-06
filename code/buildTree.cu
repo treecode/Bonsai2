@@ -786,6 +786,18 @@ void Treecode<real_t, NLEAF>::buildTree()
     fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
     std::swap(d_ptclPos_tmp.ptr, d_ptclVel.ptr);
   }
+
+#if 1
+  {
+    int ncells;
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&ncells, treeBuild::ncells, sizeof(int)));
+    fprintf(stderr, " ncells= %d \n", ncells);
+
+    std::vector<char> cells_storage(sizeof(CellData)*ncells);
+    CellData *cells = (CellData*)&cells_storage[0];
+    d_cellDataList.d2h(&cells[0], ncells);
+  }
+#endif
 }
 
 #include "TreecodeInstances.h"
