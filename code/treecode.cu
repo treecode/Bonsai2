@@ -37,20 +37,14 @@ int main(int argc, char * argv[])
     if ((optarg = opt.getValue("infile")))  fileName = std::string(optarg);
   }
 
+  typedef float real_t;
+  typedef Treecode<real_t, _NLEAF> Tree;
+
+  Tree tree;
+
   if (nPtcl > 0)
   {
     fprintf(stdout, "Using Plummer model with nPtcl= %d\n", nPtcl);
-  }
-
-  typedef float real_t;
-  typedef Treecode<real_t, _NLEAF> Tree;
-  Tree tree;
-
-  double mtot = 0.0;
-  typename vec<3,real_t>::type bmin = {+1e10};
-  typename vec<3,real_t>::type bmax = {-1e10};
-  if (nPtcl > 0)
-  {
     const Plummer data(nPtcl, seed);
     tree.alloc(nPtcl);
     for (int i = 0; i < nPtcl; i++)
@@ -68,26 +62,15 @@ int main(int argc, char * argv[])
       ptclVel.mass() = data.mass[i];
       ptclPos.mass() = data.mass[i];
 
-      mtot += data.mass[i];
-
       tree.h_ptclPos[i] = ptclPos;
       tree.h_ptclVel[i] = ptclVel;
-
-      bmin.x = std::min(bmin.x, ptclPos.x());
-      bmin.y = std::min(bmin.y, ptclPos.y());
-      bmin.z = std::min(bmin.z, ptclPos.z());
-      bmax.x = std::max(bmax.x, ptclPos.x());
-      bmax.y = std::max(bmax.y, ptclPos.y());
-      bmax.z = std::max(bmax.z, ptclPos.z());
     }
   }
   else
   {
     const ReadTipsy data(fileName);  /* read form stdin */
     nPtcl = data.NTotal;
-
     tree.alloc(nPtcl);
-
     for (int i = 0; i < nPtcl; i++)
     {
       typename Tree::Particle pos, vel;
@@ -97,12 +80,22 @@ int main(int argc, char * argv[])
       vel.x() = data.velocities[i].x;
       vel.y() = data.velocities[i].y;
       vel.z() = data.velocities[i].z;
-
       pos.mass() = vel.mass() = data.positions[i].w;
+
       tree.h_ptclPos[i] = pos;
       tree.h_ptclVel[i] = vel;
+    }
+  }
+  
+#if 1
+  {
+    double mtot = 0.0;
+    typename vec<3,real_t>::type bmin = {+1e10};
+    typename vec<3,real_t>::type bmax = {-1e10};
+    for (int i = 0; i < nPtcl; i++)
+    {
+      const Tree::Particle pos = tree.h_ptclPos[i];
       mtot += pos.mass();
-      
       bmin.x = std::min(bmin.x, pos.x());
       bmin.y = std::min(bmin.y, pos.y());
       bmin.z = std::min(bmin.z, pos.z());
@@ -110,15 +103,18 @@ int main(int argc, char * argv[])
       bmax.y = std::max(bmax.y, pos.y());
       bmax.z = std::max(bmax.z, pos.z());
     }
+    fprintf(stderr, " Total mass = %g \n", mtot);
+    fprintf(stderr, "  bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);
+    fprintf(stderr, "  bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
   }
-  fprintf(stderr, " Total mass = %g \n", mtot);
-  fprintf(stderr, "  bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);
-  fprintf(stderr, "  bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
+#endif
 
   tree.ptcl_h2d();
   tree.buildTree();
   tree.computeMultipoles();
   tree.computeForces();
+  tree.moveParticles();
+  tree.computeEnergies();
 
   return 0;
 

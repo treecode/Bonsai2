@@ -786,8 +786,6 @@ void Treecode<real_t, NLEAF>::buildTree()
     fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
     std::swap(d_ptclPos_tmp.ptr, d_ptclVel.ptr);
   }
-
-
 }
 
 #include "TreecodeInstances.h"

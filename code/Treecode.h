@@ -110,6 +110,9 @@ struct Treecode
   void buildTree();
   void computeMultipoles();
   void computeForces();
+  void moveParticles();
+  void computeEnergies();
+
 };
 
 

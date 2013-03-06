@@ -19,39 +19,33 @@ INCLUDEPATH = ./include
 CXXFLAGS  += -I$(INCLUDEPATH)
 NVCCFLAGS += -I$(INCLUDEPATH)
 
-CUDAKERNELSPATH = ./
-CUDAKERNELS = treecode.o \
-							buildTree.o \
-							computeMultipoles.o \
-							computeForces.o 
+CUDASRCPATH = ./
+CUDASRC = treecode.cu \
+					buildTree.cu \
+					computeMultipoles.cu \
+					computeForces.cu \
+					moveParticles.cu \
+					computeEnergies.cu
 
 SRCPATH = ./
 SRC = anyoption.cpp
 
 
-
 OBJ = $(SRC:%.cpp=%.o)
+CUOBJ = $(CUDASRC:%.cu=%.o)
 
 PROG = treecode
 
-AR = ar ruv
-RANLIB = ranlib
-RM = rm
+all:	  $(OBJ)  $(CUOBJ) $(PROG)
+kernels:  $(CUDAOBJ)
 
-
-all:	  $(OBJ)  $(CUDAPTX) $(PROG)
-kernels:  $(CUDAPTX)
-
-$(PROG): $(OBJ) $(CUDAKERNELS)
+$(PROG): $(OBJ) $(CUOBJ)
 	$(NVCC)  $^ -o $@  $(NVCCLDFLAGS)
 
 %.o: $(SRCPATH)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-%.ptx: $(CUDAKERNELSPATH)/%.cu
-	$(NVCC) $(NVCCFLAGS) -ptx $< -o $@
-
-%.o:  $(CUDAKERNELSPATH)/%.cu
+%.o:  $(CUDASRCPATH)/%.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 
@@ -61,7 +55,7 @@ clean:
 clean_all:
 	/bin/rm -rf *.o  $(PROG) *.a *.cu_o  *~
 
-%.o: Treecode.h
+$(CUOBJ): Treecode.h
 
 
 
