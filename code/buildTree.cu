@@ -452,6 +452,8 @@ namespace treeBuild
 #endif
         /*** keep in mind, the 0-level will be overwritten ***/
         const CellData cellData(level,cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
+        assert(cellData.first() < ncells);
+        assert(cellData.isNode());
         cellDataList[cellIndexBase + blockIdx.y] = cellData;
         shmem[16+9] = cellFirstChildIndex;
       }
@@ -570,6 +572,7 @@ namespace treeBuild
           atomicAdd(&nleaves,1);
           atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
           const CellData leafData(level+1, cellIndexBase+blockIdx.y, nBeg1, nEnd1);
+          assert(!leafData.isNode());
           cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
         }
         if (!(level&1))
@@ -744,7 +747,7 @@ namespace treeBuild
     get_cell_levels(const int n, const CellData cellList[], CellData cellListOut[], int key[], int value[])
     {
       const int idx = blockIdx.x*blockDim.x + threadIdx.x;
-      if (idx < n) return;
+      if (idx >= n) return;
 
       const CellData cell = cellList[idx];
       key  [idx] = cell.level();
@@ -756,7 +759,7 @@ namespace treeBuild
     write_newIdx(const int n, const int value[], int moved_to_idx[])
     {
       const int newIdx = blockIdx.x*blockDim.x + threadIdx.x;
-      if (newIdx < n) return;
+      if (newIdx >= n) return;
 
       const int oldIdx = value[newIdx];
       moved_to_idx[oldIdx] = newIdx;
@@ -766,19 +769,16 @@ namespace treeBuild
     shuffle_cells(const int n, const int value[], const int moved_to_idx[], const CellData cellListIn[], CellData cellListOut[])
     {
       const int idx = blockIdx.x*blockDim.x + threadIdx.x;
-      if (idx < n) return;
+      if (idx >= n) return;
 
       const int mapIdx = value[idx];
       CellData cell = cellListIn[mapIdx];
-#if 0
-      const int firstOld = cell.first();
-      assert(firstOld >= 0);
-      assert(firstOld < n);
-      const int firstNew = moved_to_idx[firstOld];
-      assert(firstNew >= 0);
-      assert(firstNew < n);
-      cell.update_first(firstNew);
-#endif
+      if (cell.isNode())
+      {
+        const int firstOld = cell.first();
+        const int firstNew = moved_to_idx[firstOld];
+        cell.update_first(firstNew);
+      }
       cellListOut[idx] = cell;
     }
 }
@@ -837,7 +837,7 @@ void Treecode<real_t, NLEAF>::buildTree()
   {
     int ncells;
     CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&ncells, treeBuild::ncells, sizeof(int)));
-    
+
     cudaDeviceSynchronize();
     const double t0 = rtc();
     const int nthread = 256;
