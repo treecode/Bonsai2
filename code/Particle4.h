@@ -7,6 +7,8 @@ template<> struct vec<4,double> { typedef double4 type; };
 template<> struct vec<3,float>  { typedef float3  type; };
 template<> struct vec<3,double> { typedef double3 type; };
 
+/**************************************************************/
+
 template<typename T>
 struct Position
 {
@@ -30,6 +32,19 @@ struct Position
         fmax(lhs.z, rhs.z));
   }
 };
+
+/**************************************************************/
+
+template<typename T>
+struct Box
+{
+  Position<T> centre;
+  T hsize;
+  __device__ Box() {}
+  __device__ Box(const Position<T> &c, T hs) : centre(c), hsize(hs) {}
+};
+
+/**************************************************************/
 
 template<typename T> 
 struct Particle4
@@ -95,3 +110,5 @@ template<> __device__ __forceinline__ int Particle4<double>::set_oct(const int o
   packed_data.w = (unsigned long long)((idx << 4) | oct);
   return oct;
 }
+
+/**************************************************************/

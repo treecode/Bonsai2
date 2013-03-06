@@ -13,7 +13,7 @@ CXXFLAGS =   $(OFLAGS)  -Wstrict-aliasing=2
 
 NVCC = $(CUDA_TK)/bin/nvcc  
 NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35 -rdc=true 
-NVCCLDFLAGS = -arch=sm_35
+NVCCLDFLAGS = -lcudadevrt -arch=sm_35 
 
 INCLUDEPATH = ./include
 CXXFLAGS  += -I$(INCLUDEPATH)
@@ -59,7 +59,7 @@ clean:
 clean_all:
 	/bin/rm -rf *.o  $(PROG) *.a *.cu_o  *~
 
-
+%.o: Treecode.h
 
 
 
