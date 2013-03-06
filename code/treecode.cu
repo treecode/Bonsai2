@@ -1,14 +1,7 @@
-#include "anyoption.h"
-#include "read_tipsy.h"
-#include "cudamem.h"
-#include "plummer.h"
-#include "Particle4.h"
-#include <string>
-#include <sstream>
+#include "Treecode.h"
 
 int main(int argc, char * argv[])
 {
-
   std::string fileName = "";
   int seed = 19810614;
   int nPtcl = -1;
@@ -48,29 +41,31 @@ int main(int argc, char * argv[])
   {
     fprintf(stdout, "Using Plummer model with nPtcl= %d\n", nPtcl);
   }
-  typedef double real_t;
-  typedef Particle4<real_t> Particle;
 
-  host_mem<Particle> h_ptclPos, h_ptclVel;
+  typedef float real_t;
+  typedef Treecode<real_t, _NLEAF> Tree;
+  Tree tree;
 
   double mtot = 0.0;
   if (nPtcl > 0)
   {
     const Plummer data(nPtcl, seed);
-    h_ptclPos.alloc(nPtcl);
-    h_ptclVel.alloc(nPtcl);
+    tree.alloc(nPtcl);
     for (int i = 0; i < nPtcl; i++)
     {
-      h_ptclPos[i].x()    = data. pos[i].x;
-      h_ptclPos[i].y()    = data. pos[i].y;
-      h_ptclPos[i].z()    = data. pos[i].z;
-      h_ptclVel[i].x()    = data. vel[i].x;
-      h_ptclVel[i].y()    = data. vel[i].y;
-      h_ptclVel[i].z()    = data. vel[i].z;
-      h_ptclVel[i].mass() = i; //data.mass[i];
-      h_ptclVel[i].mass() = data.mass[i];
-      h_ptclPos[i].mass() = data.mass[i];
+      typename Tree::Particle ptclPos, ptclVel;
+      ptclPos.x()    = data. pos[i].x;
+      ptclPos.y()    = data. pos[i].y;
+      ptclPos.z()    = data. pos[i].z;
+      ptclVel.x()    = data. vel[i].x;
+      ptclVel.y()    = data. vel[i].y;
+      ptclVel.z()    = data. vel[i].z;
+      ptclVel.mass() = i; //data.mass[i];
+      ptclVel.mass() = data.mass[i];
+      ptclPos.mass() = data.mass[i];
       mtot += data.mass[i];
+      tree.h_ptclPos[i] = ptclPos;
+      tree.h_ptclVel[i] = ptclVel;
     }
   }
   else
@@ -78,12 +73,11 @@ int main(int argc, char * argv[])
     const ReadTipsy data(fileName);  /* read form stdin */
     nPtcl = data.NTotal;
 
-    h_ptclPos.alloc(nPtcl);
-    h_ptclVel.alloc(nPtcl);
+    tree.alloc(nPtcl);
 
     for (int i = 0; i < nPtcl; i++)
     {
-      Particle pos, vel;
+      typename Tree::Particle pos, vel;
       pos.x() = data. positions[i].x;
       pos.y() = data. positions[i].y;
       pos.z() = data. positions[i].z;
@@ -92,13 +86,16 @@ int main(int argc, char * argv[])
       vel.z() = data.velocities[i].z;
 
       pos.mass() = vel.mass() = data.positions[i].w;
-      h_ptclPos[i] = pos;
-      h_ptclVel[i] = vel;
+      tree.h_ptclPos[i] = pos;
+      tree.h_ptclVel[i] = vel;
       mtot += pos.mass();
     }
   }
   fprintf(stderr, " Total mass = %g \n", mtot);
 
+  tree.ptcl_h2d();
+
+  tree.buildTree();
 
   return 0;
 

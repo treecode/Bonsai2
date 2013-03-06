@@ -12,7 +12,7 @@ CXXFLAGS =   $(OFLAGS)  -Wstrict-aliasing=2
 
 
 NVCC = $(CUDA_TK)/bin/nvcc  
-NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35
+NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35 -rdc=true 
 NVCCLDFLAGS = -arch=sm_35
 
 INCLUDEPATH = ./include
@@ -20,7 +20,8 @@ CXXFLAGS  += -I$(INCLUDEPATH)
 NVCCFLAGS += -I$(INCLUDEPATH)
 
 CUDAKERNELSPATH = ./
-CUDAKERNELS = treecode.o
+CUDAKERNELS = treecode.o \
+							treebuild.o
 
 SRCPATH = ./
 SRC = anyoption.cpp
