@@ -26,10 +26,13 @@ struct CellData
 {
   private:
     enum {NLEAF_SHIFT = 29};
-    enum {NLEAF_MASK  = (0x1FU << NLEAF_SHIFT)};
+    enum {NLEAF_MASK  = (0x7U << NLEAF_SHIFT)};
+    enum {LEVEL_SHIFT = 27};
+    enum {LEVEL_MASK  = (0x1FU << LEVEL_SHIFT)};
     uint4 packed_data;
   public:
     __device__ CellData(
+        const int level,
         const unsigned int parentCell,
         const unsigned int nBeg,
         const unsigned int nEnd,
@@ -39,17 +42,18 @@ struct CellData
       int packed_firstleaf_n = 0xFFFFFFFF;
       if (n != 0xFFFFFFFF)
         packed_firstleaf_n = first | ((unsigned int)n << NLEAF_SHIFT);
-      packed_data = make_uint4(parentCell, packed_firstleaf_n, nBeg, nEnd);
+      packed_data = make_uint4(parentCell | (level << LEVEL_SHIFT), packed_firstleaf_n, nBeg, nEnd);
     }
 
-    __device__ int n()      const {return packed_data.y >> NLEAF_SHIFT;}
-    __device__ int first()  const {return packed_data.y  & NLEAF_MASK;}
-    __device__ int parent() const {return packed_data.x;}
-    __device__ int pbeg()   const {return packed_data.z;}
-    __device__ int pend()   const {return packed_data.w;}
+    __host__ __device__ int n()      const {return packed_data.y >> NLEAF_SHIFT;}
+    __host__ __device__ int first()  const {return packed_data.y  & NLEAF_MASK;}
+    __host__ __device__ int parent() const {return packed_data.x  & LEVEL_MASK;}
+    __host__ __device__ int level()  const {return packed_data.x >> LEVEL_SHIFT;}
+    __host__ __device__ int pbeg()   const {return packed_data.z;}
+    __host__ __device__ int pend()   const {return packed_data.w;}
 
-    __device__ bool isLeaf() const {return packed_data.y == 0xFFFFFFFF;}
-    __device__ bool isNode() const {return !isLeaf();}
+    __host__ __device__ bool isLeaf() const {return packed_data.y == 0xFFFFFFFF;}
+    __host__ __device__ bool isNode() const {return !isLeaf();}
 };
 
 template<typename real_t, int NLEAF>

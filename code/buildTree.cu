@@ -449,7 +449,7 @@ namespace treeBuild
         assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
 #endif
         /*** keep in mind, the 0-level will be overwritten ***/
-        const CellData cellData(cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
+        const CellData cellData(level,cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
         cellDataList[cellIndexBase + blockIdx.y] = cellData;
         shmem[16+9] = cellFirstChildIndex;
       }
@@ -567,7 +567,7 @@ namespace treeBuild
         {
           atomicAdd(&nleaves,1);
           atomicAdd(&nbodies_leaf, nEnd1-nBeg1);
-          const CellData leafData(cellIndexBase+blockIdx.y, nBeg1, nEnd1);
+          const CellData leafData(level+1, cellIndexBase+blockIdx.y, nBeg1, nEnd1);
           cellDataList[cellFirstChildIndex + nSubNodes.y + leafOffset] = leafData;
         }
         if (!(level&1))
@@ -787,8 +787,8 @@ void Treecode<real_t, NLEAF>::buildTree()
     std::swap(d_ptclPos_tmp.ptr, d_ptclVel.ptr);
   }
 
-#if 1
-  {
+#if 1  
+  { /* print tree structure */
     int ncells;
     CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&ncells, treeBuild::ncells, sizeof(int)));
     fprintf(stderr, " ncells= %d \n", ncells);
@@ -796,6 +796,22 @@ void Treecode<real_t, NLEAF>::buildTree()
     std::vector<char> cells_storage(sizeof(CellData)*ncells);
     CellData *cells = (CellData*)&cells_storage[0];
     d_cellDataList.d2h(&cells[0], ncells);
+
+    int cellL[33] = {0};
+    for (int i = 0; i < ncells; i++)
+    {
+      const CellData cell = cells[i];
+      assert(cell.level() >= 0);
+      assert(cell.level() < 32);
+      cellL[cell.level()]++;
+    }
+    int addr = 0;
+    for (int i= 0; i < 32; i++)
+    {
+      printf("level= %d  ncells= %d   %d %d \n", i, cellL[i], addr, addr + cellL[i]);
+      addr += cellL[i];
+      if (cellL[i+1] == 0) break;
+    }
   }
 #endif
 }
