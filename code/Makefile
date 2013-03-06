@@ -12,16 +12,15 @@ CXXFLAGS =   $(OFLAGS)  -Wstrict-aliasing=2
 
 
 NVCC = $(CUDA_TK)/bin/nvcc  
-NVCCFLAGS = -arch=sm_35 -Xptxas=-v
-
-LDFLAGS = -L$(CUDA_TK)/lib64 -lcudart 
+NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35
+NVCCLDFLAGS = -arch=sm_35
 
 INCLUDEPATH = ./include
 CXXFLAGS  += -I$(INCLUDEPATH)
 NVCCFLAGS += -I$(INCLUDEPATH)
 
 CUDAKERNELSPATH = ./
-CUDAKERNELS = treecode.cu_o
+CUDAKERNELS = treecode.o
 
 SRCPATH = ./
 SRC = anyoption.cpp
@@ -41,7 +40,7 @@ all:	  $(OBJ)  $(CUDAPTX) $(PROG)
 kernels:  $(CUDAPTX)
 
 $(PROG): $(OBJ) $(CUDAKERNELS)
-	$(LD)  $^ -o $@  $(LDFLAGS)
+	$(NVCC)  $^ -o $@  $(NVCCLDFLAGS)
 
 %.o: $(SRCPATH)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -49,7 +48,7 @@ $(PROG): $(OBJ) $(CUDAKERNELS)
 %.ptx: $(CUDAKERNELSPATH)/%.cu
 	$(NVCC) $(NVCCFLAGS) -ptx $< -o $@
 
-%.cu_o:  $(CUDAKERNELSPATH)/%.cu
+%.o:  $(CUDAKERNELSPATH)/%.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 
