@@ -3,144 +3,78 @@
 namespace treeBuild
 {
   __device__ unsigned int retirementCount = 0;
-  template<typename T>
-    static __forceinline__ __device__ Position<T> get_volatile(const volatile Position<T>  &v)
-    {
-      return Position<T>(v.x, v.y, v.z);
-    };
 
-  template<typename T, const int NTHREADS>
-    __forceinline__ __device__ void reduceBlock(
-        volatile Position<T> *shmin,
-        volatile Position<T> *shmax,
-        Position<T> bmin,
-        Position<T> bmax)
+  template<int NTHREAD2>
+    __device__ float2 minmax_block(float2 sum)
     {
+      extern __shared__ float shdata[];
+      float *shMin = shdata;
+      float *shMax = shdata + (1<<NTHREAD2);
+
       const int tid = threadIdx.x;
-
-#define STORE {\
-  shmin[tid].x = bmin.x; shmin[tid].y = bmin.y; shmin[tid].z = bmin.z; \
-  shmax[tid].x = bmax.x; shmax[tid].y = bmax.y; shmax[tid].z = bmax.z; }
-
-      STORE;
+      shMin[tid] = sum.x;
+      shMax[tid] = sum.y;
       __syncthreads();
 
-      // do reduction in shared mem
-      if (NTHREADS >= 512)
+#pragma unroll    
+      for (int i = NTHREAD2-1; i >= 6; i--)
       {
-        if (tid < 256)
+        const int offset = 1 << i;
+        if (tid < offset)
         {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+256]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+256]));
-          STORE;
+          shMin[tid] = sum.x = fminf(sum.x, shMin[tid + offset]);
+          shMax[tid] = sum.y = fmaxf(sum.y, shMax[tid + offset]);
         }
         __syncthreads();
       }
-
-      if (NTHREADS >= 256)
-      {
-        if (tid < 128)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+128]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+128]));
-          STORE;
-        }
-        __syncthreads();
-      }
-
-      if (NTHREADS >= 128)
-      {
-        if (tid <  64)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+64]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+64]));
-          STORE;
-        }
-        __syncthreads();
-      }
-
 
       if (tid < 32)
       {
-        if (NTHREADS >=  64)
+        volatile float *vshMin = shMin;
+        volatile float *vshMax = shMax;
+#pragma unroll
+        for (int i = 5; i >= 0; i--)
         {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+32]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+32]));
-          STORE;
-        }
-        if (NTHREADS >=  32)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+16]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+16]));
-          STORE;
-        }
-        if (NTHREADS >=  16)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+8]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+8]));
-          STORE;
-        }
-        if (NTHREADS >=   8)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+4]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+4]));
-          STORE;
-        }
-        if (NTHREADS >=   4)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+2]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+2]));
-          STORE;
-        }
-        if (NTHREADS >=   2)
-        {
-          bmin = Position<T>::min(bmin, get_volatile<T>(shmin[tid+1]));
-          bmax = Position<T>::max(bmax, get_volatile<T>(shmax[tid+1]));
-          STORE;
+          const int offset = 1 << i;
+          vshMin[tid] = sum.x = fminf(sum.x, vshMin[tid + offset]);
+          vshMax[tid] = sum.y = fmaxf(sum.y, vshMax[tid + offset]);
         }
       }
-#undef STORE
 
-      __syncthreads();
+      return sum;
     }
 
-  template<const int NTHREADS, const int NBLOCKS, typename T>
+  template<const int NTHREAD2, typename T>
     static __global__ void computeBoundingBox(
         const int n,
         __out Position<T> *minmax_ptr,
         __out Box<T>      *box_ptr,
         const Particle4<T> *ptclPos)
     {
-      __shared__ Position<T> shmin[NTHREADS], shmax[NTHREADS];
-
-      const int gridSize = NTHREADS*NBLOCKS*2;
-      int i = blockIdx.x*NTHREADS*2 + threadIdx.x;
+      const int NTHREAD = 1<<NTHREAD2;
+      const int NBLOCK  = NTHREAD;
 
       Position<T> bmin(T(+1e10)), bmax(T(-1e10));
 
-      while (i < n)
-      {
-        const Particle4<T> p = ptclPos[i];
-        const Position<T> pos(p.x(), p.y(), p.z());
-        bmin = Position<T>::min(bmin, pos);
-        bmax = Position<T>::max(bmax, pos);
-        if (i + NTHREADS < n)
+      const int nbeg = blockIdx.x * NTHREAD + threadIdx.x;
+      for (int i = nbeg; i < n; i += NBLOCK*NTHREAD)
+        if (i < n)
         {
-          const Particle4<T> p = ptclPos[i + NTHREADS];
+          const Particle4<T> p = ptclPos[i];
           const Position<T> pos(p.x(), p.y(), p.z());
           bmin = Position<T>::min(bmin, pos);
           bmax = Position<T>::max(bmax, pos);
-        }
-        i += gridSize;
-      }
+        }   
 
-      reduceBlock<T, NTHREADS>(shmin, shmax, bmin, bmax);
+      float2 res;
+      res = minmax_block<NTHREAD2>(make_float2(bmin.x, bmax.x)); bmin.x = res.x; bmax.x = res.y;
+      res = minmax_block<NTHREAD2>(make_float2(bmin.y, bmax.y)); bmin.y = res.x; bmax.y = res.y;
+      res = minmax_block<NTHREAD2>(make_float2(bmin.z, bmax.z)); bmin.z = res.x; bmax.z = res.y;
+
       if (threadIdx.x == 0) 
       {
-        bmin = shmin[0];
-        bmax = shmax[0];
-        minmax_ptr[blockIdx.x          ] = bmin;
-        minmax_ptr[blockIdx.x + NBLOCKS] = bmax;
+        minmax_ptr[blockIdx.x         ] = bmin;
+        minmax_ptr[blockIdx.x + NBLOCK] = bmax;
       }
 
       __shared__ bool lastBlock;
@@ -148,31 +82,27 @@ namespace treeBuild
 
       if (threadIdx.x == 0)
       {
-        const int ticket = atomicInc(&retirementCount, NBLOCKS);
-        lastBlock = (ticket == NBLOCKS - 1);
+        const int ticket = atomicInc(&retirementCount, NBLOCK);
+        lastBlock = (ticket == NBLOCK - 1);
       }
 
       __syncthreads();
 
       if (lastBlock)
       {
-        Position<T> bmin(T(+1e10)), bmax(T(-1e10));
-        int i = threadIdx.x;
-        while (i < NBLOCKS)
-          if (i < NBLOCKS)
-          {
-            bmin = Position<T>::min(bmin, minmax_ptr[i        ]);
-            bmax = Position<T>::max(bmax, minmax_ptr[i+NBLOCKS]);
-            i += NTHREADS;
-          };
 
-        reduceBlock<T, NTHREADS>(shmin, shmax, bmin, bmax);
+        bmin = minmax_ptr[threadIdx.x];
+        bmax = minmax_ptr[threadIdx.x + NBLOCK];
+
+        float2 res;
+        res = minmax_block<NTHREAD2>(make_float2(bmin.x, bmax.x)); bmin.x = res.x; bmax.x = res.y;
+        res = minmax_block<NTHREAD2>(make_float2(bmin.y, bmax.y)); bmin.y = res.x; bmax.y = res.y;
+        res = minmax_block<NTHREAD2>(make_float2(bmin.z, bmax.z)); bmin.z = res.x; bmax.z = res.y;
+
         __syncthreads();
 
         if (threadIdx.x == 0)
         {
-          bmin = shmin[0];
-          bmax = shmax[0];
 #if 0
           printf("bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);
           printf("bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
@@ -184,7 +114,6 @@ namespace treeBuild
           while (hsize > h) hsize *= T(0.5);
           while (hsize < h) hsize *= T(2.0);
 
-#if 1
           const int NMAXLEVEL = 20;
 
           const T hquant = hsize / T(1<<NMAXLEVEL);
@@ -193,9 +122,6 @@ namespace treeBuild
           const long long nz = (long long)(cvec.z/hquant);
 
           const Position<T> centre(hquant * T(nx), hquant * T(ny), hquant * T(nz));
-#else
-          const Position<T> centre = cvec;
-#endif
 
           *box_ptr = Box<T>(centre, hsize);
           retirementCount = 0;
@@ -213,14 +139,16 @@ void Treecode<real_t, NLEAF>::buildTree()
   cuda_mem< Box<real_t> >  d_domain;
   d_domain.alloc(1);
   {
-    const int NBLOCKS  = 256;
-    const int NTHREADS = 256;
+    const int NTHREAD2 = 8;
+    const int NTHREAD  = 1<<NTHREAD2;
+    const int NBLOCK   = NTHREAD;
+
     cuda_mem< Position<real_t> > minmax;
-    minmax.alloc(NBLOCKS*2);
+    minmax.alloc(NBLOCK*2);
 
     cudaDeviceSynchronize();
     const double t0 = rtc();
-    treeBuild::computeBoundingBox<NTHREADS,NBLOCKS,real_t><<<NBLOCKS,NTHREADS>>>(nPtcl, minmax, d_domain, d_ptclPos);
+    treeBuild::computeBoundingBox<NTHREAD2,real_t><<<NBLOCK,NTHREAD,NTHREAD*sizeof(float2)>>>(nPtcl, minmax, d_domain, d_ptclPos);
     kernelSuccess("cudaDomainSize");
     const double dt = rtc() - t0;
     fprintf(stderr, " cudaDomainSize done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);

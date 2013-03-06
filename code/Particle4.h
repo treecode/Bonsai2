@@ -7,6 +7,9 @@ template<> struct vec<4,double> { typedef double4 type; };
 template<> struct vec<3,float>  { typedef float3  type; };
 template<> struct vec<3,double> { typedef double3 type; };
 
+template<> struct vec<2,float>  { typedef float2  type; };
+template<> struct vec<2,double> { typedef double2 type; };
+
 /**************************************************************/
 
 template<typename T>
