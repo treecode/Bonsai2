@@ -66,6 +66,11 @@ struct Treecode
 {
   typedef Particle4<real_t> Particle;
 
+  typedef typename vec<4,real_t>::type real4_t;
+  typedef typename vec<3,real_t>::type real3_t;
+  typedef typename vec<2,real_t>::type real2_t;
+
+
   int nPtcl, nLevels, nCells, nLeaves, nNodes;
   host_mem<Particle> h_ptclPos, h_ptclVel;
   cuda_mem<Particle> d_ptclPos, d_ptclVel, d_ptclPos_tmp;
@@ -77,6 +82,9 @@ struct Treecode
   cuda_mem<int>  d_stack_memory_pool;
   cuda_mem<CellData> d_cellDataList, d_cellDataList_tmp;
   cuda_mem<int>      d_key, d_value;
+
+  cuda_mem<real4_t> cellSize, cellMonopole;
+  cuda_mem<real3_t> cellQuad0, cellQuad1;
 
   Treecode() 
   {
