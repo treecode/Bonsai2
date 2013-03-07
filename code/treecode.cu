@@ -82,6 +82,11 @@ int main(int argc, char * argv[])
       vel.z() = data.velocities[i].z;
       pos.mass() = vel.mass() = data.positions[i].w;
 
+#if 0
+      pos.x() += 0.1234;
+      pos.y() += 0.4567;
+      pos.z() += 0.5678;
+#endif
       tree.h_ptclPos[i] = pos;
       tree.h_ptclVel[i] = vel;
     }

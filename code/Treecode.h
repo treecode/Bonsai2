@@ -71,6 +71,7 @@ struct Treecode
   typedef typename vec<2,real_t>::type real2_t;
 
 
+  real_t theta;
   int nPtcl, nLevels, nCells, nLeaves, nNodes;
   host_mem<Particle> h_ptclPos, h_ptclVel;
   cuda_mem<Particle> d_ptclPos, d_ptclVel, d_ptclPos_tmp;
@@ -83,11 +84,12 @@ struct Treecode
   cuda_mem<CellData> d_cellDataList, d_cellDataList_tmp;
   cuda_mem<int>      d_key, d_value;
 
-  cuda_mem<real4_t> cellSize, cellMonopole;
-  cuda_mem<real3_t> cellQuad0, cellQuad1;
+  cuda_mem<real4_t> d_cellSize, d_cellMonopole;
+  cuda_mem<real3_t> d_cellQuad0, d_cellQuad1;
 
-  Treecode() 
+  Treecode(const real_t _theta = 0.75)
   {
+    theta = _theta;
     d_domain.alloc(1);
     d_minmax.alloc(2048);
     d_level_begIdx.alloc(32);  /* max 32 levels */
