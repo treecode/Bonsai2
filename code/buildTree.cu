@@ -781,6 +781,22 @@ namespace treeBuild
       }
       cellListOut[idx] = cell;
     }
+
+  static __global__ void
+    compute_level_begIdx(const int n, const int levels[], int2 level_begendIdx[])
+    {
+      const int idx = blockIdx.x*blockDim.x + threadIdx.x;
+      if (idx >= n) return;
+
+      const int currLevel = levels[idx];
+      const int prevLevel = levels[max(idx-1, 0)];
+      if (currLevel != prevLevel || idx == 0)
+        level_begendIdx[currLevel].x = idx;
+
+      const int nextLevel = levels[min(idx+1, n-1)];
+      if (currLevel != nextLevel || idx == n-1)
+        level_begendIdx[currLevel].y = idx;
+    }
 }
 
 
@@ -850,6 +866,9 @@ void Treecode<real_t, NLEAF>::buildTree()
 
     thrust::stable_sort_by_key(keys_beg, keys_end, vals_beg); 
 
+    /* compute begining & end of each level */
+    treeBuild::compute_level_begIdx<<<nblock,nthread>>>(ncells, d_key, d_level_begIdx);
+
     treeBuild::write_newIdx <<<nblock,nthread>>>(ncells, d_value, d_key);
     treeBuild::shuffle_cells<<<nblock,nthread>>>(ncells, d_value, d_key, d_cellDataList_tmp, d_cellDataList);
     kernelSuccess("shuffle");
@@ -878,12 +897,23 @@ void Treecode<real_t, NLEAF>::buildTree()
       cellL[cell.level()]++;
     }
     int addr = 0;
+    int nlev = 0;
     for (int i= 0; i < 32; i++)
     {
+      nlev++;
       printf("level= %d  ncells= %d   %d %d \n", i, cellL[i], addr, addr + cellL[i]);
       addr += cellL[i];
       if (cellL[i+1] == 0) break;
     }
+
+    int2 levels[32];
+    d_level_begIdx.d2h(levels);
+    for (int i= 0; i < nlev; i++)
+    {
+      const int2 lv = levels[i];
+      printf("level= %d  ncells= %d   %d %d \n", i, lv.y-lv.x+1, lv.x, lv.y+1);
+    }
+
   }
 #endif
 }
