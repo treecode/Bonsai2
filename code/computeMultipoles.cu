@@ -7,60 +7,71 @@ namespace multipoles
 #define _USE_RESTRICT_ 
 #endif
 
+
   template<typename real_t>
-    static __device__ __forceinline__ 
-    void addBoxSize(typename vec<3,real_t>::type &rmin, typename vec<3,real_t>::type &rmax, const Particle4<real_t> ptcl);
-  template<typename real_t>
-    static __device__ __forceinline__
-    void addMonopole(double4 &M0, const Particle4<real_t> ptcl);
-  template<typename real_t>
-    static __device__ __forceinline__
-    void addQuadrupole(double3 &Q0, double3 &Q1, const Particle4<real_t> ptcl);
+    static __device__ __forceinline__ real_t shfl_xor(const real_t x, const int lane, const int warpSize = WARP_SIZE);
   
   template<>
-    static __device__ __forceinline__ 
-    void addBoxSize<float>(float3 &_rmin, float3 &_rmax, const Particle4<float> ptcl)
-  {
-    float3 rmin = {ptcl.x(), ptcl.y(), ptcl.z()};
-    float3 rmax = rmin;
-
-#pragma unroll
-    for (int i = WARP_SIZE2-1; i >= 0; i--)
+    static __device__ __forceinline__ double shfl_xor<double>(const double x, const int lane, const int warpSize)
     {
-      rmin.x = fminf(rmin.x, __shfl_xor(rmin.x, 1<<i, WARP_SIZE));
-      rmax.x = fminf(rmax.x, __shfl_xor(rmax.x, 1<<i, WARP_SIZE));
-      
-      rmin.y = fminf(rmin.y, __shfl_xor(rmin.y, 1<<i, WARP_SIZE));
-      rmax.y = fminf(rmax.y, __shfl_xor(rmax.y, 1<<i, WARP_SIZE));
-      
-      rmin.z = fminf(rmin.z, __shfl_xor(rmin.z, 1<<i, WARP_SIZE));
-      rmax.z = fminf(rmax.z, __shfl_xor(rmax.z, 1<<i, WARP_SIZE));
+      return __hiloint2double(
+          __shfl_xor(__double2hiint(x), lane, warpSize),
+          __shfl_xor(__double2loint(x), lane, warpSize));
     }
-    const int laneIdx = threadIdx.x & (WARP_SIZE-1);
-    if (laneIdx == 0)
-    {
-      _rmin.x = fminf(_rmin.x, rmin.x);
-      _rmin.y = fminf(_rmin.y, rmin.y);
-      _rmin.z = fminf(_rmin.z, rmin.z);
-      
-      _rmax.x = fmaxf(_rmax.x, rmax.x);
-      _rmax.y = fmaxf(_rmax.y, rmax.y);
-      _rmax.z = fmaxf(_rmax.z, rmax.z);
-    }
-  }
-
   template<>
-    static __device__ __forceinline__
-    void addMonopole<float>(double4 &_M0, const Particle4<float> ptcl)
+    static __device__ __forceinline__ float shfl_xor<float>(const float x, const int lane, const int warpSize)
     {
-      float4 M0 = {ptcl.mass()*ptcl.x(), ptcl.mass()*ptcl.y(), ptcl.mass()*ptcl.z(), ptcl.mass()};
+      return __shfl_xor(x, lane, warpSize);
+    }
+
+  template<typename real_t>
+    static __device__ __forceinline__ 
+    void addBoxSize(typename vec<3,real_t>::type &_rmin, typename vec<3,real_t>::type &_rmax, const Particle4<real_t> ptcl)
+    {
+      typename vec<3,real_t>::type rmin = {ptcl.x(), ptcl.y(), ptcl.z()};
+      typename vec<3,real_t>::type rmax = rmin;
+
 #pragma unroll
       for (int i = WARP_SIZE2-1; i >= 0; i--)
       {
-        M0.x += __shfl_xor(M0.x, 1<<i, WARP_SIZE);
-        M0.y += __shfl_xor(M0.y, 1<<i, WARP_SIZE);
-        M0.z += __shfl_xor(M0.z, 1<<i, WARP_SIZE);
-        M0.w += __shfl_xor(M0.w, 1<<i, WARP_SIZE);
+        rmin.x = min(rmin.x, shfl_xor(rmin.x, 1<<i, WARP_SIZE));
+        rmax.x = max(rmax.x, shfl_xor(rmax.x, 1<<i, WARP_SIZE));
+
+        rmin.y = min(rmin.y, shfl_xor(rmin.y, 1<<i, WARP_SIZE));
+        rmax.y = max(rmax.y, shfl_xor(rmax.y, 1<<i, WARP_SIZE));
+
+        rmin.z = min(rmin.z, shfl_xor(rmin.z, 1<<i, WARP_SIZE));
+        rmax.z = max(rmax.z, shfl_xor(rmax.z, 1<<i, WARP_SIZE));
+      }
+      const int laneIdx = threadIdx.x & (WARP_SIZE-1);
+      if (laneIdx == 0)
+      {
+        _rmin.x = min(_rmin.x, rmin.x);
+        _rmin.y = min(_rmin.y, rmin.y);
+        _rmin.z = min(_rmin.z, rmin.z);
+
+        _rmax.x = max(_rmax.x, rmax.x);
+        _rmax.y = max(_rmax.y, rmax.y);
+        _rmax.z = max(_rmax.z, rmax.z);
+      }
+    }
+
+  template<typename treal, typename real_t>
+    static __device__ __forceinline__
+    void addMonopole(double4 &_M0, const Particle4<real_t> ptcl)
+    {
+      const treal x = ptcl.x();
+      const treal y = ptcl.y();
+      const treal z = ptcl.z();
+      const treal m = ptcl.mass();
+      typename vec<4,treal>::type M0 = {m*x,m*y,m*z,m};
+#pragma unroll
+      for (int i = WARP_SIZE2-1; i >= 0; i--)
+      {
+        M0.x += shfl_xor(M0.x, 1<<i);
+        M0.y += shfl_xor(M0.y, 1<<i);
+        M0.z += shfl_xor(M0.z, 1<<i);
+        M0.w += shfl_xor(M0.w, 1<<i);
       }
 
       const int laneIdx = threadIdx.x & (WARP_SIZE-1);
@@ -73,21 +84,25 @@ namespace multipoles
       }
     }
 
-  template<typename real_t>
+  template<typename treal, typename real_t>
     static __device__ __forceinline__
     void addQuadrupole(double3 &_Q0, double3 &_Q1, const Particle4<real_t> ptcl)
     {
-      float3 Q0 = {ptcl.mass()*ptcl.x()*ptcl.x(), ptcl.mass()*ptcl.y()*ptcl.y(), ptcl.mass()*ptcl.z()*ptcl.z()};
-      float3 Q1 = {ptcl.mass()*ptcl.x()*ptcl.y(), ptcl.mass()*ptcl.x()*ptcl.z(), ptcl.mass()*ptcl.y()*ptcl.z()};
+      const treal x = ptcl.x();
+      const treal y = ptcl.y();
+      const treal z = ptcl.z();
+      const treal m = ptcl.mass();
+      typename vec<3,treal>::type Q0 = {m*x*x, m*y*y, m*z*z};
+      typename vec<3,treal>::type Q1 = {m*x*y, m*x*z, m*y*z};
 #pragma unroll
       for (int i = WARP_SIZE2-1; i >= 0; i--)
       {
-        Q0.x += __shfl_xor(Q0.x, 1<<i, WARP_SIZE);
-        Q0.y += __shfl_xor(Q0.y, 1<<i, WARP_SIZE);
-        Q0.z += __shfl_xor(Q0.z, 1<<i, WARP_SIZE);
-        Q1.x += __shfl_xor(Q1.x, 1<<i, WARP_SIZE);
-        Q1.y += __shfl_xor(Q1.y, 1<<i, WARP_SIZE);
-        Q1.z += __shfl_xor(Q1.z, 1<<i, WARP_SIZE);
+        Q0.x += shfl_xor(Q0.x, 1<<i);
+        Q0.y += shfl_xor(Q0.y, 1<<i);
+        Q0.z += shfl_xor(Q0.z, 1<<i);
+        Q1.x += shfl_xor(Q1.x, 1<<i);
+        Q1.y += shfl_xor(Q1.y, 1<<i);
+        Q1.z += shfl_xor(Q1.z, 1<<i);
       }
 
       const int laneIdx = threadIdx.x & (WARP_SIZE-1);
@@ -171,8 +186,14 @@ namespace multipoles
 #endif
 
           addBoxSize(rmin, rmax, ptcl);
-          addMonopole(M0, ptcl);
-          addQuadrupole(Q0, Q1, ptcl);
+
+#if 0
+          typedef double treal;
+#else
+          typedef float treal;
+#endif
+          addMonopole<treal>(M0, ptcl);
+          addQuadrupole<treal>(Q0, Q1, ptcl);
         }
       }
 
@@ -262,7 +283,7 @@ void Treecode<real_t, NLEAF>::computeMultipoles()
       nflops*SCALESP/1e9/dt,
       nflops*(SCALESP+SCALEDP)/1e9/dt);
 
-#if 0
+#if 1
   {
     std::vector<float4> cellSize(nCells), cellMonopole(nCells);
     std::vector<float3> cellQuad0(nCells), cellQuad1(nCells);
@@ -273,9 +294,9 @@ void Treecode<real_t, NLEAF>::computeMultipoles()
 
     float3 bmin = {+1e10f}, bmax = {-1e10f};
     double mtot = 0.0;
-    float3 com = {0.0};
-    float3 Q0 = {0.0};
-    float3 Q1 = {0.0};
+    double3 com = {0.0};
+    double3 Q0 = {0.0};
+    double3 Q1 = {0.0};
     for (int i = 0; i < 8; i++)
     {
       const float4 m = cellMonopole[i];
@@ -300,7 +321,7 @@ void Treecode<real_t, NLEAF>::computeMultipoles()
       Q1.z += q1.z;
       fprintf(stderr," cell= %d  m= %g \n", i, m.w);
     }
-    const float inv_mass = 1.0/mtot;
+    const double inv_mass = 1.0/mtot;
     com.x *= inv_mass;
     com.y *= inv_mass;
     com.z *= inv_mass;
