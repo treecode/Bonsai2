@@ -45,6 +45,8 @@ struct CellData
       packed_data = make_uint4(parentCell | (level << LEVEL_SHIFT), packed_firstleaf_n, nBeg, nEnd);
     }
 
+    __device__ CellData(const uint4 data) : packed_data(data) {}
+
     __host__ __device__ int n()      const {return packed_data.y >> NLEAF_SHIFT;}
     __host__ __device__ int first()  const {return packed_data.y  & NLEAF_MASK;}
     __host__ __device__ int parent() const {return packed_data.x  & LEVEL_MASK;}

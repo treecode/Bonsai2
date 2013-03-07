@@ -115,12 +115,18 @@ int main(int argc, char * argv[])
 #endif
 
   tree.ptcl_h2d();
+
+  const double t0 = rtc();
   tree.buildTree();
   tree.computeMultipoles();
   tree.makeGroups();
   tree.computeForces();
   tree.moveParticles();
   tree.computeEnergies();
+  const double dt = rtc() - t0;
+  fprintf(stderr, " steps are done in %g sec :: rate = %g MPtcl/sec\n",
+      dt, tree.nPtcl/1e6/dt);
+
 
   return 0;
 
