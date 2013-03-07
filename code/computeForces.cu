@@ -1,6 +1,5 @@
 #include "Treecode.h"
 
-#if 1
 namespace computeForces
 {
   /************ scan **********/
@@ -117,15 +116,15 @@ namespace computeForces
 
   //Improved Barnes Hut criterium
   static __device__ bool split_node_grav_impbh(
-      const float4 nodeCOM, 
-      const float4 groupCenter, 
-      const float4 groupSize)
+      const float4 cellSize, 
+      const float3 groupCenter, 
+      const float3 groupSize)
   {
     //Compute the distance between the group and the cell
     float3 dr = make_float3(
-        fabsf(groupCenter.x - nodeCOM.x) - (groupSize.x),
-        fabsf(groupCenter.y - nodeCOM.y) - (groupSize.y),
-        fabsf(groupCenter.z - nodeCOM.z) - (groupSize.z)
+        fabsf(groupCenter.x - cellSize.x) - (groupSize.x),
+        fabsf(groupCenter.y - cellSize.y) - (groupSize.y),
+        fabsf(groupCenter.z - cellSize.z) - (groupSize.z)
         );
 
     dr.x += fabsf(dr.x); dr.x *= 0.5f;
@@ -135,7 +134,7 @@ namespace computeForces
     //Distance squared, no need to do sqrt since opening criteria has been squared
     const float ds2    = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z;
 
-    return (ds2 <= fabsf(nodeCOM.w));
+    return (ds2 <= fabsf(cellSize.w));
   }
 
   /******* force due to monopoles *********/
@@ -271,15 +270,15 @@ namespace computeForces
 
   template<int SHIFT, int BLOCKDIM2, int NI, bool INTCOUNT>
     static __device__ 
-    uint2 treewalk(
+    uint2 treewalk_warp(
         float4 acc_i[NI],
         const float4 _pos_i[NI],
-        const float4 groupPos,
+        const float3 groupCentre,
+        const float3 groupSize,
         const float eps2,
         const uint2 top_cells,
         int *shmem,
-        int *cellList,
-        const float4 groupSize)
+        int *cellList)
     {
       const int laneIdx = threadIdx.x & (WARP_SIZE-1);
 
@@ -320,25 +319,10 @@ namespace computeForces
         cellListBlock += min(WARP_SIZE, nCells - cellListBlock);
 
         /* read from gmem cell's info */
-#if 0
-        const float4 cellSize = tex1Dfetch(texNodeSize,   cellIdx);
-        const float4 cellPos  = tex1Dfetch(texNodeCenter, cellIdx);
-
-#if 1
-        const float4 cellCOM  = tex1Dfetch(texMultipole,  cellIdx+cellIdx+cellIdx);
-
-        /* check if cell opening condition is satisfied */
-        const float4 cellCOM1 = make_float4(cellCOM.x, cellCOM.y, cellCOM.z, cellPos.w);
-        const bool splitCell = split_node_grav_impbh(cellCOM1, groupPos, groupSize);
-#else /*added by egaburov, see compute_propertiesD.cu for matching code */
-        const bool splitCell = split_node_grav_impbh(cellPos, groupPos, groupSize);
-#endif
-#else
         const float4   cellSize = tex1Dfetch(texCellSize, cellIdx);
         const CellData cellData = tex1Dfetch(texCellData, cellIdx);
 
-        const bool splitCell = split_node_grav_impbh(cellSize, groupPos, groupSize);
-#endif
+        const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize);
 
         /* compute first child, either a cell if node or a particle if leaf */
 #if 0
@@ -529,8 +513,31 @@ namespace computeForces
 
       return interactionCounters;
     }
+
+  template<int NTHREAD2, int NI>
+    __launch_bounds__(1<<NTHREAD2, 1024/(1<<NTHREAD2))
+    static __global__ 
+    void treewalk(
+        const int nPtcl,
+        const float eps2,
+        const int starting_level,
+        const Particle4<float> *ptclPos,
+        __out float4 *acc)
+    {
+      typedef float real_t;
+
+      const int NTHREAD = 1<<NTHREAD2;
+      const int pIdx = blockIdx.x*NTHREAD*NI + threadIdx.x;
+
+      Particle4<real_t> iPtcl[NI];
+
+#pragma unroll
+      for (int i = 0; i < NI; i++)
+        iPtcl[i] = ptclPos[min(pIdx + i*NTHREAD, nPtcl-1)];
+
+
+    }
 }
-#endif
 
 template<typename Tex, typename T>
 void bindTexture(Tex &tex, const T *ptr, const int size)
