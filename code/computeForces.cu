@@ -1,16 +1,139 @@
 #include "Treecode.h"
 
-#if 0
+#if 1
 namespace computeForces
 {
-#define NCRIT 64
+  static __device__ __forceinline__ int lanemask_lt()
+  {
+    int mask;
+    asm("mov.u32 %0, %lanemask_lt;" : "=r" (mask));
+    return mask;
+  }
+  static __device__ __forceinline__ uint shfl_scan_add_step(uint partial, uint up_offset)
+  {
+    uint result;
+    asm(
+        "{.reg .u32 r0;"
+        ".reg .pred p;"
+        "shfl.up.b32 r0|p, %1, %2, 0;"
+        "@p add.u32 r0, r0, %3;"
+        "mov.u32 %0, r0;}"
+        : "=r"(result) : "r"(partial), "r"(up_offset), "r"(partial));
+    return result;
+  }
+  template <const int levels>
+    static __device__ __forceinline__ uint inclusive_scan_warp(const int sum)
+    {
+      uint mysum = sum;
+#pragma unroll
+      for(int i = 0; i < levels; ++i)
+        mysum = shfl_scan_add_step(mysum, 1 << i);
+      return mysum;
+    }
 
-  texture<int4,   1, cudaReadModeElementType> texCellData;
+  static __device__ __forceinline__ int2 warpIntExclusiveScan(const int value)
+  {
+    const int sum = inclusive_scan_warp<WARP_SIZE2>(value);
+    return make_int2(sum-value, __shfl(sum, WARP_SIZE-1, WARP_SIZE));
+  }
+
+  static __device__ __forceinline__ int2 warpBinExclusiveScan(const bool p)
+  {
+    const unsigned int b = __ballot(p);
+    return make_int2(__popc(b & lanemask_lt()), __popc(b));
+  }
+
+  /******************* segscan *******/
+
+  static __device__ __forceinline__ int lanemask_le()
+  {
+    int mask;
+    asm("mov.u32 %0, %lanemask_le;" : "=r" (mask));
+    return mask;
+  }
+  static __device__ __forceinline__ int ShflSegScanStepB(
+      int partial,
+      uint distance,
+      uint up_offset)
+  {
+    asm(
+        "{.reg .u32 r0;"
+        ".reg .pred p;"
+        "shfl.up.b32 r0, %1, %2, 0;"
+        "setp.le.u32 p, %2, %3;"
+        "@p add.u32 %1, r0, %1;"
+        "mov.u32 %0, %1;}"
+        : "=r"(partial) : "r"(partial), "r"(up_offset), "r"(distance));
+    return partial;
+  }
+  template<const int SIZE2>
+    static __device__ __forceinline__ int inclusive_segscan_warp_step(int value, const int distance)
+    {
+      for (int i = 0; i < SIZE2; i++)
+        value = ShflSegScanStepB(value, distance, 1<<i);
+      return value;
+    }
+  static __device__ __forceinline__ int2 inclusive_segscan_warp(
+      const int packed_value, const int carryValue)
+  {
+    const int  flag = packed_value < 0;
+    const int  mask = -flag;
+    const int value = (~mask & packed_value) + (mask & (-1-packed_value));
+
+    const int flags = __ballot(flag);
+
+    const int dist_block = __clz(__brev(flags));
+
+    const int laneIdx = threadIdx.x & (WARP_SIZE - 1);
+    const int distance = __clz(flags & lanemask_le()) + laneIdx - 31;
+    const int val = inclusive_segscan_warp_step<WARP_SIZE2>(value, min(distance, laneIdx));
+    return make_int2(val + (carryValue & (-(laneIdx < dist_block))), __shfl(val, WARP_SIZE-1, WARP_SIZE));
+  }
+
+
+
+#define NCRIT 64
+#define CELL_LIST_MEM_PER_WARP (2048*32)
+
+  template<int SHIFT>
+    __forceinline__ static __device__ int ringAddr(const int i)
+    {
+      return (i & ((CELL_LIST_MEM_PER_WARP<<SHIFT) - 1));
+    }
+
+  texture<uint4,  1, cudaReadModeElementType> texCellData;
   texture<float4, 1, cudaReadModeElementType> texCellSize;
   texture<float4, 1, cudaReadModeElementType> texCellMonopole;
   texture<float4, 1, cudaReadModeElementType> texCellQuad0;
   texture<float4, 1, cudaReadModeElementType> texCellQuad1;
   texture<float4, 1, cudaReadModeElementType> texPtcl;
+
+  /*******************************/
+  /****** Opening criterion ******/
+  /*******************************/
+
+  //Improved Barnes Hut criterium
+  static __device__ bool split_node_grav_impbh(
+      const float4 nodeCOM, 
+      const float4 groupCenter, 
+      const float4 groupSize)
+  {
+    //Compute the distance between the group and the cell
+    float3 dr = make_float3(
+        fabsf(groupCenter.x - nodeCOM.x) - (groupSize.x),
+        fabsf(groupCenter.y - nodeCOM.y) - (groupSize.y),
+        fabsf(groupCenter.z - nodeCOM.z) - (groupSize.z)
+        );
+
+    dr.x += fabsf(dr.x); dr.x *= 0.5f;
+    dr.y += fabsf(dr.y); dr.y *= 0.5f;
+    dr.z += fabsf(dr.z); dr.z *= 0.5f;
+
+    //Distance squared, no need to do sqrt since opening criteria has been squared
+    const float ds2    = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z;
+
+    return (ds2 <= fabsf(nodeCOM.w));
+  }
 
   /******* force due to monopoles *********/
 
@@ -210,21 +333,25 @@ namespace computeForces
         const float4   cellSize = tex1Dfetch(texCellSize, cellIdx);
         const CellData cellData = tex1Dfetch(texCellData, cellIdx);
 
-        const bool splitCell = split_node_grav_impbh(cellPos, groupPos, groupSize);
+        const bool splitCell = split_node_grav_impbh(cellSize, groupPos, groupSize);
 #endif
 
         /* compute first child, either a cell if node or a particle if leaf */
+#if 0
         const int cellData = __float_as_int(cellSize.w);
         const int firstChild =  cellData & 0x0FFFFFFF;
         const int nChildren  = (cellData & 0xF0000000) >> 28;
+#endif
 
         /**********************************************/
         /* split cells that satisfy opening condition */
         /**********************************************/
 
-        const bool isNode = cellPos.w > 0.0f;
+        const bool isNode = cellData.isNode();
 
         {
+          const int firstChild = cellData.first();
+          const int nChildren  = cellData.n();
           bool splitNode  = isNode && splitCell && useCell;
 
           /* use exclusive scan to compute scatter addresses for each of the child cells */
@@ -309,8 +436,8 @@ namespace computeForces
           const bool isLeaf = !isNode;
           bool isDirect = splitCell && isLeaf && useCell;
 
-          const int firstBody =   cellData & BODYMASK;
-          const int     nBody = ((cellData & INVBMASK) >> LEAFBIT)+1;
+          const int firstBody = cellData.pbeg();
+          const int     nBody = cellData.pend() - cellData.pbeg();
 
           const int2 childScatter = warpIntExclusiveScan(nBody & (-isDirect));
           int nParticle  = childScatter.y;
