@@ -862,6 +862,10 @@ void Treecode<real_t, NLEAF>::buildTree()
     kernelSuccess("buildOctree");
     const double t1 = rtc();
     const double dt = t1 - t0;
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nLevels, treeBuild::nlevels, sizeof(int)));
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nCells,  treeBuild::ncells, sizeof(int)));
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nNodes,  treeBuild::nnodes, sizeof(int)));
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nLeaves, treeBuild::nleaves, sizeof(int)));
     fprintf(stderr, " buildOctree done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
     std::swap(d_ptclPos_tmp.ptr, d_ptclVel.ptr);
   }
@@ -869,26 +873,23 @@ void Treecode<real_t, NLEAF>::buildTree()
   /* sort nodes by level */
 #if 1
   {
-    int ncells;
-    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&ncells, treeBuild::ncells, sizeof(int)));
-
     cudaDeviceSynchronize();
     const double t0 = rtc();
     const int nthread = 256;
-    const int nblock  = (ncells-1)/nthread  + 1;
-    treeBuild::get_cell_levels<<<nblock,nthread>>>(ncells, d_cellDataList, d_cellDataList_tmp, d_key, d_value);
+    const int nblock  = (nCells-1)/nthread  + 1;
+    treeBuild::get_cell_levels<<<nblock,nthread>>>(nCells, d_cellDataList, d_cellDataList_tmp, d_key, d_value);
 
     thrust::device_ptr<int> keys_beg(d_key.ptr);
-    thrust::device_ptr<int> keys_end(d_key.ptr + ncells);
+    thrust::device_ptr<int> keys_end(d_key.ptr + nCells);
     thrust::device_ptr<int> vals_beg(d_value.ptr);
 
     thrust::stable_sort_by_key(keys_beg, keys_end, vals_beg); 
 
     /* compute begining & end of each level */
-    treeBuild::compute_level_begIdx<<<nblock,nthread,(nthread+2)*sizeof(int)>>>(ncells, d_key, d_level_begIdx);
+    treeBuild::compute_level_begIdx<<<nblock,nthread,(nthread+2)*sizeof(int)>>>(nCells, d_key, d_level_begIdx);
 
-    treeBuild::write_newIdx <<<nblock,nthread>>>(ncells, d_value, d_key);
-    treeBuild::shuffle_cells<<<nblock,nthread>>>(ncells, d_value, d_key, d_cellDataList_tmp, d_cellDataList);
+    treeBuild::write_newIdx <<<nblock,nthread>>>(nCells, d_value, d_key);
+    treeBuild::shuffle_cells<<<nblock,nthread>>>(nCells, d_value, d_key, d_cellDataList_tmp, d_cellDataList);
     kernelSuccess("shuffle");
     const double t1 = rtc();
     const double dt = t1 - t0;
@@ -898,16 +899,14 @@ void Treecode<real_t, NLEAF>::buildTree()
 
 #if 1  
   { /* print tree structure */
-    int ncells;
-    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&ncells, treeBuild::ncells, sizeof(int)));
-    fprintf(stderr, " ncells= %d \n", ncells);
+    fprintf(stderr, " ncells= %d nLevels= %d  nNodes= %d nLeaves= %d (%d) \n", nCells, nLevels, nNodes, nLeaves, nNodes+nLeaves);
 
-    std::vector<char> cells_storage(sizeof(CellData)*ncells);
+    std::vector<char> cells_storage(sizeof(CellData)*nCells);
     CellData *cells = (CellData*)&cells_storage[0];
-    d_cellDataList.d2h(&cells[0], ncells);
+    d_cellDataList.d2h(&cells[0], nCells);
 
     int cellL[33] = {0};
-    for (int i = 0; i < ncells; i++)
+    for (int i = 0; i < nCells; i++)
     {
       const CellData cell = cells[i];
       assert(cell.level() >= 0);

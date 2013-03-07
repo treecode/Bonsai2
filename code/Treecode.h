@@ -66,7 +66,7 @@ struct Treecode
 {
   typedef Particle4<real_t> Particle;
 
-  int nPtcl;
+  int nPtcl, nLevels, nCells, nLeaves, nNodes;
   host_mem<Particle> h_ptclPos, h_ptclVel;
   cuda_mem<Particle> d_ptclPos, d_ptclVel, d_ptclPos_tmp;
   cuda_mem<Box<real_t> > d_domain;
