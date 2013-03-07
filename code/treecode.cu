@@ -117,6 +117,7 @@ int main(int argc, char * argv[])
   tree.ptcl_h2d();
   tree.buildTree();
   tree.computeMultipoles();
+  tree.makeGroups();
   tree.computeForces();
   tree.moveParticles();
   tree.computeEnergies();

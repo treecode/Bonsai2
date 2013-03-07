@@ -23,6 +23,7 @@ CUDASRCPATH = ./
 CUDASRC = treecode.cu \
 					buildTree.cu \
 					computeMultipoles.cu \
+					makeGroups.cu \
 					computeForces.cu \
 					moveParticles.cu \
 					computeEnergies.cu

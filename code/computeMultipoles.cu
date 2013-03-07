@@ -43,17 +43,14 @@ namespace multipoles
         rmin.z = min(rmin.z, shfl_xor(rmin.z, 1<<i, WARP_SIZE));
         rmax.z = max(rmax.z, shfl_xor(rmax.z, 1<<i, WARP_SIZE));
       }
-      const int laneIdx = threadIdx.x & (WARP_SIZE-1);
-      if (laneIdx == 0)
-      {
-        _rmin.x = min(_rmin.x, rmin.x);
-        _rmin.y = min(_rmin.y, rmin.y);
-        _rmin.z = min(_rmin.z, rmin.z);
 
-        _rmax.x = max(_rmax.x, rmax.x);
-        _rmax.y = max(_rmax.y, rmax.y);
-        _rmax.z = max(_rmax.z, rmax.z);
-      }
+      _rmin.x = min(_rmin.x, rmin.x);
+      _rmin.y = min(_rmin.y, rmin.y);
+      _rmin.z = min(_rmin.z, rmin.z);
+
+      _rmax.x = max(_rmax.x, rmax.x);
+      _rmax.y = max(_rmax.y, rmax.y);
+      _rmax.z = max(_rmax.z, rmax.z);
     }
 
   template<typename treal, typename real_t>
@@ -74,14 +71,10 @@ namespace multipoles
         M0.w += shfl_xor(M0.w, 1<<i);
       }
 
-      const int laneIdx = threadIdx.x & (WARP_SIZE-1);
-      if (laneIdx == 0)
-      {
-        _M0.x += M0.x;
-        _M0.y += M0.y;
-        _M0.z += M0.z;
-        _M0.w += M0.w;
-      }
+      _M0.x += M0.x;
+      _M0.y += M0.y;
+      _M0.z += M0.z;
+      _M0.w += M0.w;
     }
 
   template<typename treal, typename real_t>
@@ -105,16 +98,12 @@ namespace multipoles
         Q1.z += shfl_xor(Q1.z, 1<<i);
       }
 
-      const int laneIdx = threadIdx.x & (WARP_SIZE-1);
-      if (laneIdx == 0)
-      {
-        _Q0.x += Q0.x;
-        _Q0.y += Q0.y;
-        _Q0.z += Q0.z;
-        _Q1.x += Q1.x;
-        _Q1.y += Q1.y;
-        _Q1.z += Q1.z;
-      }
+      _Q0.x += Q0.x;
+      _Q0.y += Q0.y;
+      _Q0.z += Q0.z;
+      _Q1.x += Q1.x;
+      _Q1.y += Q1.y;
+      _Q1.z += Q1.z;
     }
 
 #if 0
