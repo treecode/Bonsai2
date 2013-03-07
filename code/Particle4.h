@@ -7,14 +7,15 @@
 /**************************************************************/
 
 template<int N, typename T> struct vec;
-template<> struct vec<4,float>  { typedef float4  type; };
-template<> struct vec<4,double> { typedef double4 type; };
 
-template<> struct vec<3,float>  { typedef float3  type; };
-template<> struct vec<3,double> { typedef double3 type; };
+template<> struct vec<4,float>  { typedef float4  type;  __host__ __device__ static float4 null() {return make_float4(0.0f, 0.0f, 0.0f, 0.0f);} };
+template<> struct vec<4,double> { typedef double4 type;  __host__ __device__ static double4 null() {return make_double4(0.0, 0.0, 0.0, 0.0);} };
 
-template<> struct vec<2,float>  { typedef float2  type; };
-template<> struct vec<2,double> { typedef double2 type; };
+template<> struct vec<3,float>  { typedef float3  type;  __host__ __device__ static float3 null() {return make_float3(0.0f, 0.0f, 0.0f);} };
+template<> struct vec<3,double> { typedef double3 type;  __host__ __device__ static double3 null() {return make_double3(0.0, 0.0, 0.0);} };
+
+template<> struct vec<2,float>  { typedef float2  type;  __host__ __device__ static float2 null() {return make_float2(0.0f, 0.0f);} };
+template<> struct vec<2,double> { typedef double2 type;  __host__ __device__ static double2 null() {return make_double2(0.0, 0.0);} };
 
 /**************************************************************/
 

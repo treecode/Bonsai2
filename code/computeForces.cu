@@ -3,6 +3,7 @@
 #if 1
 namespace computeForces
 {
+  /************ scan **********/
   static __device__ __forceinline__ int lanemask_lt()
   {
     int mask;
@@ -37,6 +38,7 @@ namespace computeForces
     return make_int2(sum-value, __shfl(sum, WARP_SIZE-1, WARP_SIZE));
   }
 
+  /************** binary scan ***********/
   static __device__ __forceinline__ int2 warpBinExclusiveScan(const bool p)
   {
     const unsigned int b = __ballot(p);
@@ -94,6 +96,13 @@ namespace computeForces
 
 #define NCRIT 64
 #define CELL_LIST_MEM_PER_WARP (2048*32)
+  
+  texture<uint4,  1, cudaReadModeElementType> texCellData;
+  texture<float4, 1, cudaReadModeElementType> texCellSize;
+  texture<float4, 1, cudaReadModeElementType> texCellMonopole;
+  texture<float4, 1, cudaReadModeElementType> texCellQuad0;
+  texture<float2, 1, cudaReadModeElementType> texCellQuad1;
+  texture<float4, 1, cudaReadModeElementType> texPtcl;
 
   template<int SHIFT>
     __forceinline__ static __device__ int ringAddr(const int i)
@@ -101,12 +110,6 @@ namespace computeForces
       return (i & ((CELL_LIST_MEM_PER_WARP<<SHIFT) - 1));
     }
 
-  texture<uint4,  1, cudaReadModeElementType> texCellData;
-  texture<float4, 1, cudaReadModeElementType> texCellSize;
-  texture<float4, 1, cudaReadModeElementType> texCellMonopole;
-  texture<float4, 1, cudaReadModeElementType> texCellQuad0;
-  texture<float4, 1, cudaReadModeElementType> texCellQuad1;
-  texture<float4, 1, cudaReadModeElementType> texPtcl;
 
   /*******************************/
   /****** Opening criterion ******/
@@ -244,8 +247,9 @@ namespace computeForces
       if (FULL || cellIdx >= 0)
       {
         M0 = tex1Dfetch(texCellMonopole, cellIdx);
-        Q0 = tex1Dfetch(texCellQuad0,    cellIdx);
-        Q1 = tex1Dfetch(texCellQuad1,    cellIdx);
+        const Quadrupole<float> Q(tex1Dfetch(texCellQuad0,cellIdx), tex1Dfetch(texCellQuad1,cellIdx));
+        Q0 = make_float4(Q.xx(), Q.yy(), Q.zz(), 0.0f);
+        Q1 = make_float4(Q.xy(), Q.xz(), Q.yz(), 0.0f);
       }
       else
         M0 = Q0 = Q1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -528,9 +532,37 @@ namespace computeForces
 }
 #endif
 
+template<typename Tex, typename T>
+void bindTexture(Tex &tex, const T *ptr, const int size)
+{
+  tex.addressMode[0] = cudaAddressModeWrap;
+  tex.addressMode[1] = cudaAddressModeWrap;
+  tex.filterMode     = cudaFilterModePoint;
+  tex.normalized     = false;
+  CUDA_SAFE_CALL(cudaBindTexture(0, tex, ptr, size*sizeof(T)));
+}
+
+template<typename Tex>
+void unbindTexture(Tex &tex)
+{
+  CUDA_SAFE_CALL(cudaUnbindTexture(tex));
+}
+
   template<typename real_t, int NLEAF>
 void Treecode<real_t, NLEAF>::computeForces()
 {
+  bindTexture(computeForces::texCellData,     (uint4* )d_cellDataList.ptr, nCells);
+  bindTexture(computeForces::texCellSize,     d_cellSize.ptr,     nCells);
+  bindTexture(computeForces::texCellMonopole, d_cellMonopole.ptr, nCells);
+  bindTexture(computeForces::texCellQuad0,    d_cellQuad0.ptr,    nCells);
+  bindTexture(computeForces::texCellQuad1,    d_cellQuad1.ptr,    nCells);
+
+  unbindTexture(computeForces::texCellQuad1);
+  unbindTexture(computeForces::texCellQuad0);
+  unbindTexture(computeForces::texCellMonopole);
+  unbindTexture(computeForces::texCellSize);
+  unbindTexture(computeForces::texCellData);
+
   printf("Computing forces\n");
 }
 

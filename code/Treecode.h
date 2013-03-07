@@ -63,6 +63,38 @@ struct CellData
     }
 };
 
+template<typename real_t>
+struct Quadrupole
+{
+  private:
+    typedef typename vec<4,real_t>::type real4_t;
+    typedef typename vec<2,real_t>::type real2_t;
+    real4_t q0;
+    real2_t q1;
+
+  public:
+    __host__ __device__ Quadrupole(const real4_t _q0, const real2_t _q1) : q0(_q0), q1(_q1) {}
+    __host__ __device__ Quadrupole() : q0(vec<4,real_t>::null()), q1(vec<2,real_t>::null()) {}
+
+    __host__ __device__ real_t xx() const {return q0.x;}
+    __host__ __device__ real_t yy() const {return q0.y;}
+    __host__ __device__ real_t zz() const {return q0.z;}
+    __host__ __device__ real_t xy() const {return q0.w;}
+    __host__ __device__ real_t xz() const {return q1.x;}
+    __host__ __device__ real_t yz() const {return q1.y;}
+
+    __host__ __device__ real_t& xx() {return q0.x;}
+    __host__ __device__ real_t& yy() {return q0.y;}
+    __host__ __device__ real_t& zz() {return q0.z;}
+    __host__ __device__ real_t& xy() {return q0.w;}
+    __host__ __device__ real_t& xz() {return q1.x;}
+    __host__ __device__ real_t& yz() {return q1.y;}
+
+    __host__ __device__ real4_t get_q0() const {return q0;}
+    __host__ __device__ real2_t get_q1() const {return q1;}
+};
+
+
 template<typename real_t, int NLEAF>
 struct Treecode
 {
@@ -86,8 +118,9 @@ struct Treecode
   cuda_mem<CellData> d_cellDataList, d_cellDataList_tmp;
   cuda_mem<int>      d_key, d_value;
 
-  cuda_mem<real4_t> d_cellSize, d_cellMonopole;
-  cuda_mem<real3_t> d_cellQuad0, d_cellQuad1;
+  cuda_mem<real4_t> d_cellSize,  d_cellMonopole;
+  cuda_mem<real4_t> d_cellQuad0;
+  cuda_mem<real2_t> d_cellQuad1;
 
   Treecode(const real_t _theta = 0.75)
   {
