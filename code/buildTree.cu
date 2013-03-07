@@ -785,17 +785,35 @@ namespace treeBuild
   static __global__ void
     compute_level_begIdx(const int n, const int levels[], int2 level_begendIdx[])
     {
-      const int idx = blockIdx.x*blockDim.x + threadIdx.x;
-      if (idx >= n) return;
+      const int gidx = blockIdx.x*blockDim.x + threadIdx.x;
+      if (gidx >= n) return;
 
-      const int currLevel = levels[idx];
-      const int prevLevel = levels[max(idx-1, 0)];
-      if (currLevel != prevLevel || idx == 0)
-        level_begendIdx[currLevel].x = idx;
+      extern __shared__ int shLevels[];
 
-      const int nextLevel = levels[min(idx+1, n-1)];
-      if (currLevel != nextLevel || idx == n-1)
-        level_begendIdx[currLevel].y = idx;
+      const int tid = threadIdx.x;
+      shLevels[tid+1] = levels[gidx];
+
+      int shIdx = 0;
+      int gmIdx = max(blockIdx.x*blockDim.x-1,0);
+      if (tid == 1)
+      {
+        shIdx = blockDim.x+1;
+        gmIdx = min(blockIdx.x*blockDim.x + blockDim.x,n-1);
+      }
+      if (tid < 2)
+        shLevels[shIdx] = levels[gmIdx];
+
+      __syncthreads();
+
+      const int idx = tid+1;
+      const int currLevel = shLevels[idx];
+      const int prevLevel = shLevels[idx-1];
+      if (currLevel != prevLevel || gidx == 0)
+        level_begendIdx[currLevel].x = gidx;
+
+      const int nextLevel = shLevels[idx+1];
+      if (currLevel != nextLevel || gidx == n-1)
+        level_begendIdx[currLevel].y = gidx;
     }
 }
 
@@ -867,7 +885,7 @@ void Treecode<real_t, NLEAF>::buildTree()
     thrust::stable_sort_by_key(keys_beg, keys_end, vals_beg); 
 
     /* compute begining & end of each level */
-    treeBuild::compute_level_begIdx<<<nblock,nthread>>>(ncells, d_key, d_level_begIdx);
+    treeBuild::compute_level_begIdx<<<nblock,nthread,(nthread+2)*sizeof(int)>>>(ncells, d_key, d_level_begIdx);
 
     treeBuild::write_newIdx <<<nblock,nthread>>>(ncells, d_value, d_key);
     treeBuild::shuffle_cells<<<nblock,nthread>>>(ncells, d_value, d_key, d_cellDataList_tmp, d_cellDataList);
