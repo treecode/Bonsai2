@@ -536,10 +536,23 @@ namespace computeForces
         iPtcl[i] = ptclPos[min(pIdx + i*NTHREAD, nPtcl-1)];
 
 
+      typedef typename vec<3,real_t>::type real3_t;
+
+#if 0
+      real3_t rmin = {+1e10f};
+      real3_t rmax = {+1e10f};
+   
+#pragma unroll
+      for (int i = 0; i < NI; i++) 
+        computeMinMax(rmin, rmaxg, iPtcl[i]);
+#endif
+
+
+
     }
 }
 
-template<typename Tex, typename T>
+  template<typename Tex, typename T>
 void bindTexture(Tex &tex, const T *ptr, const int size)
 {
   tex.addressMode[0] = cudaAddressModeWrap;
@@ -549,7 +562,7 @@ void bindTexture(Tex &tex, const T *ptr, const int size)
   CUDA_SAFE_CALL(cudaBindTexture(0, tex, ptr, size*sizeof(T)));
 }
 
-template<typename Tex>
+  template<typename Tex>
 void unbindTexture(Tex &tex)
 {
   CUDA_SAFE_CALL(cudaUnbindTexture(tex));
