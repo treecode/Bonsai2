@@ -451,7 +451,9 @@ namespace treeBuild
         assert(cellFirstChildIndex + nChildrenCell < d_cell_max);
 #endif
         /*** keep in mind, the 0-level will be overwritten ***/
-        const CellData cellData(level,cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell);
+        assert(nChildrenCell > 0);
+        assert(nChildrenCell <= 8);
+        const CellData cellData(level,cellParentIndex, nBeg, nEnd, cellFirstChildIndex, nChildrenCell-1);
         assert(cellData.first() < ncells);
         assert(cellData.isNode());
         cellDataList[cellIndexBase + blockIdx.y] = cellData;
@@ -871,7 +873,7 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 
   /* sort nodes by level */
-#if 1
+#if 0
   {
     cudaDeviceSynchronize();
     const double t0 = rtc();
@@ -897,7 +899,7 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 #endif
 
-#if 1  
+#if 1
   { /* print tree structure */
     fprintf(stderr, " ncells= %d nLevels= %d  nNodes= %d nLeaves= %d (%d) \n", nCells, nLevels, nNodes, nLeaves, nNodes+nLeaves);
 
@@ -929,6 +931,13 @@ void Treecode<real_t, NLEAF>::buildTree()
     {
       const int2 lv = levels[i];
       printf("level= %d  ncells= %d   %d %d \n", i, lv.y-lv.x+1, lv.x, lv.y+1);
+    }
+
+    for (int i = 0; i < 100; i++)
+    {
+      printf("cellIdx= %d  isNode= %s: first= %d  n= %d  pbeg= %d  pend =%d\n",
+          i, cells[i].isNode() ? "true ":"false",
+          cells[i].first(), cells[i].n(), cells[i].pbeg(), cells[i].pend());
     }
 
   }

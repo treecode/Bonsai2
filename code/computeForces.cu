@@ -326,6 +326,7 @@ namespace computeForces
       int directCounter = 0;
       int approxCounter = 0;
 
+
       for (int root_cell = top_cells.x; root_cell < top_cells.y; root_cell += WARP_SIZE)
         if (root_cell + laneIdx < top_cells.y)
           cellList[ringAddr<SHIFT>(root_cell - top_cells.x + laneIdx)] = root_cell + laneIdx;
@@ -350,6 +351,16 @@ namespace computeForces
         /* read from gmem cell's info */
         const float4   cellSize = tex1Dfetch(texCellSize, cellIdx);
         const CellData cellData = tex1Dfetch(texCellData, cellIdx);
+
+#if 0
+        if (blockIdx.x == 0 && threadIdx.x < 32)
+        {
+          printf("cellData.first() = %d    cellData.n()= %d \n",
+              cellData.first(),
+              cellData.n()); 
+          assert(0);
+        }
+#endif
 
         const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize);
 
@@ -520,7 +531,7 @@ namespace computeForces
       }  /* level completed */
 #endif
 
-#if 1
+#if 0
       if (approxCounter > 0)
       {
         approxAcc<NI,false>(acc_i, pos_i, laneIdx < approxCounter ? approxCellIdx : -1, eps2);
@@ -530,7 +541,7 @@ namespace computeForces
       }
 #endif
 
-#if 1
+#if 0
       if (directCounter > 0)
       {
         directAcc<NI,false>(acc_i, pos_i, laneIdx < directCounter ? directPtclIdx : -1, eps2);
@@ -626,8 +637,15 @@ namespace computeForces
 
         real4_t iAcc[NI];
 
+#if 1
         const uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
           (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
+#else
+        uint2 counters = {1,1};
+        iAcc[0].x = cvec.x;
+        iAcc[0].y = cvec.y;
+        iAcc[0].z = cvec.z;
+#endif
 
         assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
 
@@ -668,6 +686,7 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   bindTexture(computeForces::texCellMonopole, d_cellMonopole.ptr, nCells);
   bindTexture(computeForces::texCellQuad0,    d_cellQuad0.ptr,    nCells);
   bindTexture(computeForces::texCellQuad1,    d_cellQuad1.ptr,    nCells);
+  bindTexture(computeForces::texPtcl,         d_ptclPos.ptr,      nCells);
 
   cuda_mem<int2> d_interactions;
   if (INTCOUNT)
@@ -707,6 +726,7 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
     };
   }
 
+  unbindTexture(computeForces::texPtcl);
   unbindTexture(computeForces::texCellQuad1);
   unbindTexture(computeForces::texCellQuad0);
   unbindTexture(computeForces::texCellMonopole);

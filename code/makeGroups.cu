@@ -166,11 +166,12 @@ namespace makeGroups
       const int groupIdx = idx >> NGROUP2;
 #endif
       const int iptclIdx = idx & (NGROUP - 1);
+      const int firstPtcl = idx & (-(NGROUP-1));
 
       if (iptclIdx == 0)
       {
         const int idx = atomicAdd(&groupCounter,1);
-        groupList[idx] = GroupData(iptclIdx, min(NGROUP, n-iptclIdx));
+        groupList[idx] = GroupData(firstPtcl, min(NGROUP, n-firstPtcl));
       }
     }
 

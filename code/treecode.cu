@@ -122,7 +122,7 @@ int main(int argc, char * argv[])
   tree.makeGroups();
 #if 1
   const double2 interactions = tree.computeForces(true);
-  fprintf(stderr, " direct= %g   approx= %g \n", interactions.x, interactions.y);
+  fprintf(stderr, " direct= %g   approx= %g \n", interactions.y/tree.nPtcl, interactions.x/tree.nPtcl);
 #else
   tree.computeForces();
 #endif
