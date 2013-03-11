@@ -2,6 +2,35 @@
 
 namespace computeForces
 {
+  template<typename real_t>
+    static __device__ __forceinline__ 
+    void addBoxSize(typename vec<3,real_t>::type &_rmin, typename vec<3,real_t>::type &_rmax, const Position<real_t> pos)
+    {
+      typename vec<3,real_t>::type rmin = {pos.x, pos.y, pos.z};
+      typename vec<3,real_t>::type rmax = rmin;
+
+#pragma unroll
+      for (int i = WARP_SIZE2-1; i >= 0; i--)
+      {
+        rmin.x = min(rmin.x, __shfl_xor(rmin.x, 1<<i, WARP_SIZE));
+        rmax.x = max(rmax.x, __shfl_xor(rmax.x, 1<<i, WARP_SIZE));
+
+        rmin.y = min(rmin.y, __shfl_xor(rmin.y, 1<<i, WARP_SIZE));
+        rmax.y = max(rmax.y, __shfl_xor(rmax.y, 1<<i, WARP_SIZE));
+
+        rmin.z = min(rmin.z, __shfl_xor(rmin.z, 1<<i, WARP_SIZE));
+        rmax.z = max(rmax.z, __shfl_xor(rmax.z, 1<<i, WARP_SIZE));
+      }
+
+      _rmin.x = min(_rmin.x, rmin.x);
+      _rmin.y = min(_rmin.y, rmin.y);
+      _rmin.z = min(_rmin.z, rmin.z);
+
+      _rmax.x = max(_rmax.x, rmax.x);
+      _rmax.y = max(_rmax.y, rmax.y);
+      _rmax.z = max(_rmax.z, rmax.z);
+    }
+
   /************ scan **********/
   static __device__ __forceinline__ int lanemask_lt()
   {
@@ -140,7 +169,7 @@ namespace computeForces
   /******* force due to monopoles *********/
 
   static __device__ __forceinline__ float4 add_acc(
-      float4 acc,  const float4 pos,
+      float4 acc,  const float3 pos,
       const float massj, const float3 posj,
       const float eps2)
   {
@@ -165,7 +194,7 @@ namespace computeForces
 
   static __device__ __forceinline__ float4 add_acc(
       float4 acc, 
-      const float4 pos,
+      const float3 pos,
       const float mass, const float3 com,
       const float4 Q0,  const float4 Q1, float eps2) 
   {
@@ -214,7 +243,7 @@ namespace computeForces
   template<int NI, bool FULL>
     static __device__ __forceinline__ void directAcc(
         float4 acc_i[NI], 
-        const float4 pos_i[NI],
+        const float3 pos_i[NI],
         const int ptclIdx,
         const float eps2)
     {
@@ -238,7 +267,7 @@ namespace computeForces
   template<int NI, bool FULL>
     static __device__ __forceinline__ void approxAcc(
         float4 acc_i[NI], 
-        const float4 pos_i[NI],
+        const float3 pos_i[NI],
         const int cellIdx,
         const float eps2)
     {
@@ -272,18 +301,18 @@ namespace computeForces
     static __device__ 
     uint2 treewalk_warp(
         float4 acc_i[NI],
-        const float4 _pos_i[NI],
+        const float3 _pos_i[NI],
         const float3 groupCentre,
         const float3 groupSize,
         const float eps2,
-        const uint2 top_cells,
+        const int2 top_cells,
         int *shmem,
         int *cellList)
     {
       const int laneIdx = threadIdx.x & (WARP_SIZE-1);
 
       /* this helps to unload register pressure */
-      float4 pos_i[NI];
+      float3 pos_i[NI];
 #pragma unroll 1
       for (int i = 0; i < NI; i++)
         pos_i[i] = _pos_i[i];
@@ -514,41 +543,102 @@ namespace computeForces
       return interactionCounters;
     }
 
-  template<int NTHREAD2, int NI>
+  __device__ unsigned int retired_groupCount = 0;
+
+  template<int NTHREAD2, bool INTCOUNT>
     __launch_bounds__(1<<NTHREAD2, 1024/(1<<NTHREAD2))
     static __global__ 
     void treewalk(
         const int nPtcl,
+        const int nGroups,
+        const GroupData *groupList,
         const float eps2,
         const int starting_level,
         const Particle4<float> *ptclPos,
-        __out float4 *acc)
+        __out Particle4<float> *acc,
+        __out int2   *interactions,
+        __out int    *gmem_pool)
     {
       typedef float real_t;
+      typedef typename vec<3,real_t>::type real3_t;
+      typedef typename vec<4,real_t>::type real4_t;
 
       const int NTHREAD = 1<<NTHREAD2;
-      const int pIdx = blockIdx.x*NTHREAD*NI + threadIdx.x;
+      const int shMemSize = NTHREAD;
+      __shared__ int shmem_pool[shMemSize];
 
-      Particle4<real_t> iPtcl[NI];
+      const int laneIdx = threadIdx.x & (WARP_SIZE-1);
+      const int warpIdx = threadIdx.x >> WARP_SIZE2;
 
-#pragma unroll
-      for (int i = 0; i < NI; i++)
-        iPtcl[i] = ptclPos[min(pIdx + i*NTHREAD, nPtcl-1)];
+      const int NWARP2 = NTHREAD2 - WARP_SIZE2;
+      const int sh_offs = (shMemSize >> NWARP2) * warpIdx;
+      int *shmem = shmem_pool + sh_offs;
+      int *gmem  =  gmem_pool + CELL_LIST_MEM_PER_WARP*((1<<NWARP2)*blockIdx.x + warpIdx);
 
+      const int2 top_cells = make_int2(0,8);
 
-      typedef typename vec<3,real_t>::type real3_t;
+      while(1)
+      {
+        int groupIdx = 0;
+        if (laneIdx == 0)
+          groupIdx = atomicAdd(&retired_groupCount, 1);
+        groupIdx = __shfl(groupIdx, 0, WARP_SIZE);
 
+        if (groupIdx >= nGroups) return;
+
+        const GroupData group = groupList[groupIdx];
+        const int pbeg = group.pbeg();
+        assert(group.np() > 0);
+        assert(group.np() <= WARP_SIZE);
 #if 0
-      real3_t rmin = {+1e10f};
-      real3_t rmax = {+1e10f};
-   
-#pragma unroll
-      for (int i = 0; i < NI; i++) 
-        computeMinMax(rmin, rmaxg, iPtcl[i]);
+        const int np   = group.np();
 #endif
 
+        const int NI = 1;
+        real3_t iPos[NI];
 
+#pragma unroll
+        for (int i = 0; i < NI; i++)
+        {
+          const Particle4<real_t> ptcl = ptclPos[min(pbeg + i*WARP_SIZE+laneIdx, nPtcl-1)];
+          iPos[i] = make_float3(ptcl.x(), ptcl.y(), ptcl.z());
+        }
 
+        real3_t rmin = {iPos[0].x, iPos[0].y, iPos[0].z};
+        real3_t rmax = rmin;
+
+#pragma unroll
+        for (int i = 0; i < NI; i++) 
+          addBoxSize(rmin, rmax, Position<real_t>(iPos[i].x, iPos[i].y, iPos[i].z));
+
+        rmin.x = __shfl_xor(rmin.x,0);
+        rmin.y = __shfl_xor(rmin.y,0);
+        rmin.z = __shfl_xor(rmin.z,0);
+        rmax.x = __shfl_xor(rmax.x,0);
+        rmax.y = __shfl_xor(rmax.y,0);
+        rmax.z = __shfl_xor(rmax.z,0);
+
+        const real_t half = static_cast<real_t>(0.5f);
+        const real3_t cvec = {half*(rmax.x+rmin.x), half*(rmax.y+rmin.y), half*(rmax.z+rmin.z)};
+        const real3_t hvec = {half*(rmax.x-rmin.x), half*(rmax.y-rmin.y), half*(rmax.z-rmin.z)};
+
+        const int SHIFT = 0;
+
+        real4_t iAcc[NI];
+
+        const uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
+          (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
+
+        assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
+
+        const int pidx = pbeg + laneIdx;
+        if (pidx < nPtcl)
+        {
+          acc         [pidx] = iAcc[0];
+          if (INTCOUNT)
+            interactions[pidx] = make_int2(counters.x, counters.y);
+        }
+      }
     }
 }
 
@@ -569,13 +659,53 @@ void unbindTexture(Tex &tex)
 }
 
   template<typename real_t, int NLEAF>
-void Treecode<real_t, NLEAF>::computeForces()
+double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
 {
+  assert(INTCOUNT);
+
   bindTexture(computeForces::texCellData,     (uint4* )d_cellDataList.ptr, nCells);
   bindTexture(computeForces::texCellSize,     d_cellSize.ptr,     nCells);
   bindTexture(computeForces::texCellMonopole, d_cellMonopole.ptr, nCells);
   bindTexture(computeForces::texCellQuad0,    d_cellQuad0.ptr,    nCells);
   bindTexture(computeForces::texCellQuad1,    d_cellQuad1.ptr,    nCells);
+
+  cuda_mem<int2> d_interactions;
+  if (INTCOUNT)
+    d_interactions.alloc(nPtcl);
+
+
+  const int NTHREAD2 = 7;
+  cuda_mem<int> d_gmem_pool;
+
+  const int nblock = 16*13;
+  const int NGROUP2 = 5;
+  d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(1<<(NTHREAD2-NGROUP2)));
+
+  const int starting_level = 1;
+  int value = 0;
+  cudaDeviceSynchronize();
+  const double t0 = rtc();
+  CUDA_SAFE_CALL(cudaMemcpyToSymbol(computeForces::retired_groupCount, &value, sizeof(int)));
+  computeForces::treewalk<NTHREAD2,true><<<nblock,1<<NTHREAD2>>>(
+      nPtcl, nGroups, d_groupList, eps2, starting_level,
+      d_ptclPos_tmp, d_ptclPos_tmp,
+      d_interactions, d_gmem_pool);
+  kernelSuccess("treewalk");
+  const double t1 = rtc();
+  const double dt = t1 - t0;
+  fprintf(stderr, " treewalk done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
+
+  double2 interactions;
+  if (INTCOUNT)
+  {
+    std::vector<int2> h_interactions(nPtcl);
+    d_interactions.d2h(&h_interactions[0]);
+    for (int i = 0; i < nPtcl; i++)
+    {
+      interactions.x += (double)h_interactions[i].x;
+      interactions.y += (double)h_interactions[i].y;
+    };
+  }
 
   unbindTexture(computeForces::texCellQuad1);
   unbindTexture(computeForces::texCellQuad0);
@@ -583,7 +713,7 @@ void Treecode<real_t, NLEAF>::computeForces()
   unbindTexture(computeForces::texCellSize);
   unbindTexture(computeForces::texCellData);
 
-  printf("Computing forces\n");
+  return interactions;
 }
 
 #include "TreecodeInstances.h"

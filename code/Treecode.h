@@ -22,6 +22,23 @@ static void kernelSuccess(const char kernel[] = "kernel")
     assert(0);
   }
 }
+
+struct GroupData
+{
+  private:
+    int2 packed_data;
+  public:
+    __host__ __device__ GroupData(const int2 data) : packed_data(data) {}
+    __host__ __device__ GroupData(const int pbeg, const int np)
+    {
+      packed_data.x = pbeg;
+      packed_data.y = np;
+    }
+
+    __host__ __device__ int pbeg() const {return packed_data.x;}
+    __host__ __device__ int np  () const {return packed_data.y;}
+};
+
 struct CellData
 {
   private:
@@ -105,8 +122,9 @@ struct Treecode
   typedef typename vec<2,real_t>::type real2_t;
 
 
-  real_t theta;
-  int nPtcl, nLevels, nCells, nLeaves, nNodes;
+  real_t theta, eps2;
+  int nPtcl, nLevels, nCells, nLeaves, nNodes, nGroups;
+
   host_mem<Particle> h_ptclPos, h_ptclVel;
   cuda_mem<Particle> d_ptclPos, d_ptclVel, d_ptclPos_tmp;
   cuda_mem<Box<real_t> > d_domain;
@@ -116,15 +134,19 @@ struct Treecode
   int node_max, cell_max, stack_size;
   cuda_mem<int>  d_stack_memory_pool;
   cuda_mem<CellData> d_cellDataList, d_cellDataList_tmp;
+  cuda_mem<GroupData> d_groupList;
+
   cuda_mem<int>      d_key, d_value;
+
 
   cuda_mem<real4_t> d_cellSize,  d_cellMonopole;
   cuda_mem<real4_t> d_cellQuad0;
   cuda_mem<real2_t> d_cellQuad1;
 
-  Treecode(const real_t _theta = 0.75)
+  Treecode(const real_t _eps = 0.01, const real_t _theta = 0.75)
   {
     theta = _theta;
+    eps2  = _eps*_eps;
     d_domain.alloc(1);
     d_minmax.alloc(2048);
     d_level_begIdx.alloc(32);  /* max 32 levels */
@@ -171,7 +193,7 @@ struct Treecode
   void buildTree();
   void computeMultipoles();
   void makeGroups();
-  void computeForces();
+  double2 computeForces(const bool INTCOUNT = false);
   void moveParticles();
   void computeEnergies();
 

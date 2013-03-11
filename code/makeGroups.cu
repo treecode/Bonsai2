@@ -152,6 +152,28 @@ namespace makeGroups
       ptclOut[idx] = ptclIn[mapIdx];
     }
 
+  __device__ unsigned int groupCounter = 0;
+
+  template<int NGROUP2>
+  static __global__
+    void make_groups(const int n, GroupData *groupList)
+    {
+      const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+      if (idx >= n) return;
+
+      const int NGROUP = 1<<NGROUP2;
+#if 0
+      const int groupIdx = idx >> NGROUP2;
+#endif
+      const int iptclIdx = idx & (NGROUP - 1);
+
+      if (iptclIdx == 0)
+      {
+        const int idx = atomicAdd(&groupCounter,1);
+        groupList[idx] = GroupData(iptclIdx, min(NGROUP, n-iptclIdx));
+      }
+    }
+
 };
 
   template<typename real_t, int NLEAF>
@@ -163,25 +185,35 @@ void Treecode<real_t, NLEAF>::makeGroups()
 
   d_key.realloc(2.0*nPtcl);
   d_value.realloc(nPtcl);
+  d_groupList.realloc(nCells);
 
   unsigned long long *d_keys = (unsigned long long*)d_key.ptr;
   int *d_values = d_value.ptr;
 
   cudaDeviceSynchronize();
   const double t0 = rtc();
+  nGroups = 0;
+  CUDA_SAFE_CALL(cudaMemcpyToSymbol(makeGroups::groupCounter, &nGroups, sizeof(int)));
   makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos, d_keys, d_values);
- 
+
   thrust::device_ptr<unsigned long long> keys_beg(d_keys);
   thrust::device_ptr<unsigned long long> keys_end(d_keys + nPtcl);
   thrust::device_ptr<int> vals_beg(d_values);
   thrust::sort_by_key(keys_beg, keys_end, vals_beg); 
 
   makeGroups::shuffle_ptcl<real_t><<<nblock,nthread>>>(nPtcl, d_values, d_ptclPos, d_ptclPos_tmp);
-    
+ 
+  const int NGROUP2 = 5;
+  makeGroups::make_groups<NGROUP2><<<nblock,nthread>>>(nPtcl, d_groupList);
+
   kernelSuccess("makeGroups");
   const double t1 = rtc();
   const double dt = t1 - t0;
   fprintf(stderr, " makeGroups done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
+  CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nGroups, makeGroups::groupCounter, sizeof(int)));
+
+
+  fprintf(stderr, "nGroup= %d\n", nGroups);
 }
 
 #include "TreecodeInstances.h"

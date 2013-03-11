@@ -120,7 +120,12 @@ int main(int argc, char * argv[])
   tree.buildTree();
   tree.computeMultipoles();
   tree.makeGroups();
+#if 1
+  const double2 interactions = tree.computeForces(true);
+  fprintf(stderr, " direct= %g   approx= %g \n", interactions.x, interactions.y);
+#else
   tree.computeForces();
+#endif
   tree.moveParticles();
   tree.computeEnergies();
   const double dt = rtc() - t0;
