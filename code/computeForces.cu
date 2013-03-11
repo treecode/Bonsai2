@@ -531,7 +531,7 @@ namespace computeForces
       }  /* level completed */
 #endif
 
-#if 0
+#if 1
       if (approxCounter > 0)
       {
         approxAcc<NI,false>(acc_i, pos_i, laneIdx < approxCounter ? approxCellIdx : -1, eps2);
@@ -541,7 +541,7 @@ namespace computeForces
       }
 #endif
 
-#if 0
+#if 1
       if (directCounter > 0)
       {
         directAcc<NI,false>(acc_i, pos_i, laneIdx < directCounter ? directPtclIdx : -1, eps2);
@@ -599,11 +599,10 @@ namespace computeForces
 
         const GroupData group = groupList[groupIdx];
         const int pbeg = group.pbeg();
-        assert(group.np() > 0);
-        assert(group.np() <= WARP_SIZE);
-#if 0
         const int np   = group.np();
-#endif
+
+        assert(np > 0);
+        assert(np <= WARP_SIZE);
 
         const int NI = 1;
         real3_t iPos[NI];
@@ -611,7 +610,7 @@ namespace computeForces
 #pragma unroll
         for (int i = 0; i < NI; i++)
         {
-          const Particle4<real_t> ptcl = ptclPos[min(pbeg + i*WARP_SIZE+laneIdx, nPtcl-1)];
+          const Particle4<real_t> ptcl = ptclPos[min(pbeg + i*WARP_SIZE+laneIdx, pbeg+np-1)];
           iPos[i] = make_float3(ptcl.x(), ptcl.y(), ptcl.z());
         }
 
@@ -622,12 +621,18 @@ namespace computeForces
         for (int i = 0; i < NI; i++) 
           addBoxSize(rmin, rmax, Position<real_t>(iPos[i].x, iPos[i].y, iPos[i].z));
 
-        rmin.x = __shfl_xor(rmin.x,0);
-        rmin.y = __shfl_xor(rmin.y,0);
-        rmin.z = __shfl_xor(rmin.z,0);
-        rmax.x = __shfl_xor(rmax.x,0);
-        rmax.y = __shfl_xor(rmax.y,0);
-        rmax.z = __shfl_xor(rmax.z,0);
+        rmin.x = __shfl(rmin.x,0);
+        rmin.y = __shfl(rmin.y,0);
+        rmin.z = __shfl(rmin.z,0);
+        rmax.x = __shfl(rmax.x,0);
+        rmax.y = __shfl(rmax.y,0);
+        rmax.z = __shfl(rmax.z,0);
+
+#if 0
+        if (laneIdx == 0)
+          printf("groupIdx= %d: rmin= %g %g %g  rmax= %g %g %g \n",
+              groupIdx, rmin.x, rmin.y, rmin.z, rmax.x, rmax.y, rmax.z);
+#endif
 
         const real_t half = static_cast<real_t>(0.5f);
         const real3_t cvec = {half*(rmax.x+rmin.x), half*(rmax.y+rmin.y), half*(rmax.z+rmin.z)};

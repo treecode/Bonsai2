@@ -215,7 +215,7 @@ namespace multipoles
         const real_t dx = cvec.x - com.x;
         const real_t dy = cvec.y - com.y;
         const real_t dz = cvec.z - com.z;
-        const real_t  s = sqrt(dx*dy + dy*dz + dz);
+        const real_t  s = sqrt(dx*dy + dy*dz + dz*dz);
         const real_t  l = max(static_cast<real_t>(2.0f)*max(hvec.x, max(hvec.y, hvec.z)), static_cast<real_t>(1.0e-6f));
         const real_t cellOp = (l*inv_theta) + s;
         const real_t cellOp2 = cellOp*cellOp;
@@ -296,12 +296,13 @@ void Treecode<real_t, NLEAF>::computeMultipoles()
       const float4 m = cellMonopole[i];
       const float4 c = cellSize    [i];
       const Quadrupole<real_t> q(cellQuad0[i], cellQuad1[i]);
-      bmin.x = std::min(bmin.x, c.x - c.w);
-      bmin.y = std::min(bmin.y, c.y - c.w);
-      bmin.z = std::min(bmin.z, c.z - c.w);
-      bmax.x = std::max(bmax.x, c.x + c.w);
-      bmax.y = std::max(bmax.y, c.y + c.w);
-      bmax.z = std::max(bmax.z, c.z + c.w);
+      const float h = sqrt(c.w)*0.5;
+      bmin.x = std::min(bmin.x, c.x - h);
+      bmin.y = std::min(bmin.y, c.y - h);
+      bmin.z = std::min(bmin.z, c.z - h);
+      bmax.x = std::max(bmax.x, c.x + h);
+      bmax.y = std::max(bmax.y, c.y + h);
+      bmax.z = std::max(bmax.z, c.z + h);
       mtot += m.w;
       com.x += m.x*m.w;
       com.y += m.y*m.w;
