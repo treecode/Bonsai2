@@ -640,7 +640,8 @@ namespace computeForces
 
         const int SHIFT = 0;
 
-        real4_t iAcc[NI];
+        real4_t fnull = {static_cast<real_t>(0.0f)};
+        real4_t iAcc[NI] = {fnull};
 
 #if 1
         const uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
@@ -730,6 +731,22 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
       interactions.y += (double)h_interactions[i].y;
     };
   }
+
+#if 1
+  std::vector<Particle4<real_t> > h_acc(nPtcl);
+  d_ptclPos_tmp.d2h(&h_acc[0]);
+  double gpot = 0.0;
+  double3 gacc = {0.0};
+  const real_t mass = 1.0/nPtcl;
+  for (int i = 0 ; i < nPtcl; i++)
+  {
+    gpot += 0.5*h_acc[i].mass() * mass;
+    gacc.x += h_acc[i].x() * mass;
+    gacc.y += h_acc[i].y() * mass;
+    gacc.z += h_acc[i].z() * mass;
+  }
+  printf("gpot= %g  acc= %g %g %g \n", gpot, gacc.x, gacc.y, gacc.z);
+#endif
 
   unbindTexture(computeForces::texPtcl);
   unbindTexture(computeForces::texCellQuad1);
