@@ -363,18 +363,7 @@ namespace computeForces
         const float4   cellSize = tex1Dfetch(texCellSize, cellIdx);
         const CellData cellData = tex1Dfetch(texCellData, cellIdx);
 
-#if 0
-        if (blockIdx.x == 0 && threadIdx.x < 32)
-        {
-          printf("cellData.first() = %d    cellData.n()= %d \n",
-              cellData.first(),
-              cellData.n()); 
-          assert(0);
-        }
-#endif
-
-
-#if 0
+#if 1
         const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize) ||
           (cellData.pend() - cellData.pbeg() < 4);
 #else
@@ -650,18 +639,14 @@ namespace computeForces
         assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
 
         const int pidx = pbeg + laneIdx;
-        if (pidx < pbeg + np)
-        {
-          acc[pidx] = iAcc[0];
-          if (INTCOUNT)
-            interactions[pidx] = make_int2(counters.x, counters.y);
-        }
-        if (pidx+WARP_SIZE < pbeg + np)
-        {
-          acc[WARP_SIZE+pidx] = iAcc[1];
-          if (INTCOUNT)
-            interactions[WARP_SIZE+pidx] = make_int2(0,0);//counters.x, counters.y);
-        }
+#pragma unroll
+        for (int i = 0; i < NI; i++)
+          if (pidx + i*WARP_SIZE< pbeg + np)
+          {
+            acc[i*WARP_SIZE + pidx] = iAcc[i];
+            if (INTCOUNT && i == 0)
+              interactions[i*WARP_SIZE + pidx] = make_int2(counters.x, counters.y);
+          }
       }
     }
 }
