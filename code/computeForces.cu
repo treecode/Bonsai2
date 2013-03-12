@@ -362,7 +362,11 @@ namespace computeForces
         }
 #endif
 
+#if 1
         const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize);
+#else  /* test tree-walk down to each leaf */
+        const bool splitCell = true;
+#endif
 
         /* compute first child, either a cell if node or a particle if leaf */
 #if 0
@@ -692,7 +696,7 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   bindTexture(computeForces::texCellMonopole, d_cellMonopole.ptr, nCells);
   bindTexture(computeForces::texCellQuad0,    d_cellQuad0.ptr,    nCells);
   bindTexture(computeForces::texCellQuad1,    d_cellQuad1.ptr,    nCells);
-  bindTexture(computeForces::texPtcl,         d_ptclPos.ptr,      nCells);
+  bindTexture(computeForces::texPtcl,         d_ptclPos.ptr,      nPtcl);
 
   cuda_mem<int2> d_interactions;
   if (INTCOUNT)
@@ -738,14 +742,46 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   double gpot = 0.0;
   double3 gacc = {0.0};
   const real_t mass = 1.0/nPtcl;
+  double gpot0 = 0.0;
+  std::vector<char> cells_storage(sizeof(CellData)*nCells);
+  CellData *cells = (CellData*)&cells_storage[0];
+  d_cellDataList.d2h(&cells[0], nCells);
   for (int i = 0 ; i < nPtcl; i++)
   {
     gpot += 0.5*h_acc[i].mass() * mass;
     gacc.x += h_acc[i].x() * mass;
     gacc.y += h_acc[i].y() * mass;
     gacc.z += h_acc[i].z() * mass;
+#if 0
+    if (i % 1000 == 0) printf("i= %d\n", i);
+    for (int j  = i+1; j < nPtcl ;j++)
+    {
+      const double dx = h_ptclPos[j].x() - h_ptclPos[i].x();
+      const double dy = h_ptclPos[j].y() - h_ptclPos[i].y();
+      const double dz = h_ptclPos[j].z() - h_ptclPos[i].z();
+      const double r2 = dx*dx + dy*dy + dz*dz + eps2;
+      gpot0 += h_ptclPos[i].mass() * h_ptclPos[j].mass() / sqrt(r2);
+    }
+#endif
+#if 0
+    if (i % 1000 == 0) printf("i= %d\n", i);
+    for (int jc = 0; jc < nCells; jc++)
+      if (cells[jc].isLeaf())
+      {
+        const int pbeg = cells[jc].pbeg();
+        const int pend = cells[jc].pend();
+        for (int j  = pbeg; j < pend ;j++)
+        {
+          const double dx = h_ptclPos[j].x() - h_ptclPos[i].x();
+          const double dy = h_ptclPos[j].y() - h_ptclPos[i].y();
+          const double dz = h_ptclPos[j].z() - h_ptclPos[i].z();
+          const double r2 = dx*dx + dy*dy + dz*dz + eps2;
+          gpot0 += 0.5*h_ptclPos[i].mass() * h_ptclPos[j].mass() / sqrt(r2);
+        }
+      }
+#endif
   }
-  printf("gpot= %g  acc= %g %g %g \n", gpot, gacc.x, gacc.y, gacc.z);
+  printf("gpot= %g %g  acc= %g %g %g \n", gpot, gpot0, gacc.x, gacc.y, gacc.z);
 #endif
 
   unbindTexture(computeForces::texPtcl);
