@@ -217,6 +217,7 @@ void Treecode<real_t, NLEAF>::makeGroups()
   nGroups = 0;
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(makeGroups::groupCounter, &nGroups, sizeof(int)));
 
+#if 0
 #if 1
   const int nblock  = (nPtcl-1)/nthread + 1;
   const int NBINS = 21; 
@@ -241,6 +242,27 @@ void Treecode<real_t, NLEAF>::makeGroups()
 #else
   const int nblock = (nCells-1)/nthread + 1;
   makeGroups::make_groups<<<nblock,nthread>>>(nCells, d_cellDataList, d_groupList);
+#endif
+#endif
+
+#if 1
+  const int nblock  = (nPtcl-1)/nthread + 1;
+  const int NBINS = 21; 
+
+#if 0
+  d_ptclPos_tmp.h2d(&ptcl0[0]);
+#else
+  d_ptclPos.d2d(d_ptclPos_tmp);
+#endif
+  makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos_tmp, d_keys, d_values);
+
+  thrust::device_ptr<unsigned long long> keys_beg(d_keys);
+  thrust::device_ptr<unsigned long long> keys_end(d_keys + nPtcl);
+  thrust::device_ptr<Particle> vals_beg(d_ptclPos_tmp.ptr);
+  thrust::sort_by_key(keys_beg, keys_end, vals_beg); 
+
+  const int NGROUP2 = 5;
+  makeGroups::make_groups<NGROUP2><<<nblock,nthread>>>(nPtcl, d_groupList);
 #endif
 
 

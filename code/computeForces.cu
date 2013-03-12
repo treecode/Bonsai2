@@ -122,8 +122,7 @@ namespace computeForces
 
 
 
-#define NCRIT 64
-#define CELL_LIST_MEM_PER_WARP (2048*32)
+#define CELL_LIST_MEM_PER_WARP (4096*32)
   
   texture<uint4,  1, cudaReadModeElementType> texCellData;
   texture<float4, 1, cudaReadModeElementType> texCellSize;
@@ -164,7 +163,7 @@ namespace computeForces
     const float ds2 = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z;
 
 #if 1
-    return (ds2 <= fabsf(cellSize.w));
+    return (ds2 < fabsf(cellSize.w));
 #else
     return true;
 #endif
@@ -394,11 +393,7 @@ namespace computeForces
 
           /* make sure we still have available stack space */
           if (childScatter.y + nCells - cellListBlock > (CELL_LIST_MEM_PER_WARP<<SHIFT))
-          {
-            assert(0);
             return make_uint2(0xFFFFFFFF,0xFFFFFFFF);
-          }
-
 
 #if 1
           /* if so populate next level stack in gmem */
@@ -597,11 +592,9 @@ namespace computeForces
       int *shmem = shmem_pool + sh_offs;
       int *gmem  =  gmem_pool + CELL_LIST_MEM_PER_WARP*((1<<NWARP2)*blockIdx.x + warpIdx);
 
-#if 0
+#if 1
       int2 top_cells = level_begIdx[start_level];
       top_cells.y++;
-      if (blockIdx.x == 0 && threadIdx.x == 0)
-        printf("top_cells= %d %d \n", top_cells.x, top_cells.y);
 #else
       const int2 top_cells = {0,8};
 #endif
@@ -635,7 +628,6 @@ namespace computeForces
 #pragma unroll
         for (int i = 0; i < NI; i++)
         {
-          assert(i==0);
           const Particle4<real_t> ptcl = ptclPos[min(pbeg + i*WARP_SIZE+laneIdx, pbeg+np-1)];
           iPos[i] = make_float3(ptcl.x(), ptcl.y(), ptcl.z());
         }
@@ -653,8 +645,6 @@ namespace computeForces
         rmax.x = __shfl(rmax.x,0);
         rmax.y = __shfl(rmax.y,0);
         rmax.z = __shfl(rmax.z,0);
-
-
 
         const real_t half = static_cast<real_t>(0.5f);
         const real3_t cvec = {half*(rmax.x+rmin.x), half*(rmax.y+rmin.y), half*(rmax.z+rmin.z)};
@@ -787,25 +777,13 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   double2 interactions = make_double2(0.0,0.0);
   if (INTCOUNT)
   {
-    unsigned long long approx = 0;
-    unsigned long long direct = 0;
     std::vector<int2> h_interactions(nPtcl);
     d_interactions.d2h(&h_interactions[0]);
     for (int i = 0; i < nPtcl; i++)
     {
-#if 1
       interactions.x += (double)h_interactions[i].x;
       interactions.y += (double)h_interactions[i].y;
-#else
-      approx += h_interactions[i].x;
-      direct += h_interactions[i].y;
-#endif
-    };
-#if 0
-    fprintf(stderr, " direct= %llu,  approx= %llu\n", direct, approx);
-    interactions = make_double2((double)approx, (double)direct);
-#endif
-
+    }
   }
 
 #if 1

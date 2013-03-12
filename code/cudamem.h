@@ -42,6 +42,13 @@ struct cuda_mem
     assert( ptr != NULL);
     CUDA_SAFE_CALL(cudaMemcpy(host_ptr, ptr, n * sizeof(T), cudaMemcpyDeviceToHost));
   }
+  void d2d(T *host_ptr, int n = -1) const
+  {
+    if (n < 0) n = this->n;
+    assert(host_ptr != NULL);
+    assert( ptr != NULL);
+    CUDA_SAFE_CALL(cudaMemcpy(host_ptr, ptr, n * sizeof(T), cudaMemcpyDeviceToDevice));
+  }
   operator T* ()
   {
     return ptr;
