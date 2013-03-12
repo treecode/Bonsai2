@@ -933,12 +933,14 @@ void Treecode<real_t, NLEAF>::buildTree()
       printf("level= %d  ncells= %d   %d %d \n", i, lv.y-lv.x+1, lv.x, lv.y+1);
     }
 
+#if 0
     for (int i = 0; i < 100; i++)
     {
       printf("cellIdx= %d  isNode= %s: first= %d  n= %d  pbeg= %d  pend =%d\n",
           i, cells[i].isNode() ? "true ":"false",
           cells[i].first(), cells[i].n(), cells[i].pbeg(), cells[i].pend());
     }
+#endif
 
   }
 #endif

@@ -252,9 +252,13 @@ namespace computeForces
         const float eps2)
     {
 #if 1
+#if 1
       const float4 M0 = (FULL || ptclIdx >= 0) ? tex1Dfetch(texPtcl, ptclIdx) : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#else
+      const float4 M0 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#endif
 
-      //#pragma unroll
+#pragma unroll
       for (int j = 0; j < WARP_SIZE; j++)
       {
         const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
@@ -559,11 +563,11 @@ namespace computeForces
     __launch_bounds__(1<<NTHREAD2, 1024/(1<<NTHREAD2))
     static __global__ 
     void treewalk(
-        const int nPtcl,
         const int nGroups,
         const GroupData *groupList,
         const float eps2,
-        const int starting_level,
+        const int start_level,
+        const int2 *level_begIdx,
         const Particle4<float> *ptclPos,
         __out Particle4<float> *acc,
         __out int2   *interactions,
@@ -585,7 +589,14 @@ namespace computeForces
       int *shmem = shmem_pool + sh_offs;
       int *gmem  =  gmem_pool + CELL_LIST_MEM_PER_WARP*((1<<NWARP2)*blockIdx.x + warpIdx);
 
-      const int2 top_cells = make_int2(0,8);
+#if 0
+      int2 top_cells = level_begIdx[start_level];
+      top_cells.y++;
+      if (blockIdx.x == 0 && threadIdx.x == 0)
+        printf("top_cells= %d %d \n", top_cells.x, top_cells.y);
+#else
+      const int2 top_cells = {0,8};
+#endif
 
       while(1)
       {
@@ -772,7 +783,7 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   const double t0 = rtc();
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(computeForces::retired_groupCount, &value, sizeof(int)));
   computeForces::treewalk<NTHREAD2,true><<<nblock,1<<NTHREAD2>>>(
-      nPtcl, nGroups, d_groupList, eps2, starting_level,
+      nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
       d_ptclPos, d_ptclPos_tmp,
       d_interactions, d_gmem_pool);
   kernelSuccess("treewalk");

@@ -209,7 +209,7 @@ void Treecode<real_t, NLEAF>::makeGroups()
   nGroups = 0;
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(makeGroups::groupCounter, &nGroups, sizeof(int)));
 
-#if 0
+#if 1
   const int nblock  = (nPtcl-1)/nthread + 1;
   const int NBINS = 21; 
   makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos, d_keys, d_values);

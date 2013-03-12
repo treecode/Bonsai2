@@ -52,6 +52,9 @@ $(PROG): $(OBJ) $(CUOBJ)
 makeGroups.o: $(CUDASRCPATH)/makeGroups.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
+computeForces.o: $(CUDASRCPATH)/computeForces.cu
+	$(NVCC) $(NVCCFLAGS) -c $< -o $@ -ftz=true -rdc=true
+
 
 clean:
 	/bin/rm -rf *.o  $(PROG) *.a *.cu_o 

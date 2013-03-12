@@ -152,8 +152,9 @@ namespace multipoles
 
       const CellData cell = cells[cellIdx];
 
-      typename vec<3,real_t>::type rmin = {static_cast<real_t>(+1e10f)};
-      typename vec<3,real_t>::type rmax = {static_cast<real_t>(-1e10f)};
+      const real_t huge = static_cast<real_t>(1e10f);
+      typename vec<3,real_t>::type rmin = {+huge,+huge,+huge};
+      typename vec<3,real_t>::type rmax = {-huge,-huge,-huge};
       double4 M = {0.0};
       Quadrupole<double> Q;
 
@@ -173,7 +174,9 @@ namespace multipoles
         for (int i = firstBody; i < lastBody; i += WARP_SIZE)
         {
           nflop++;
-          const Particle4<real_t> ptcl(i + laneIdx < lastBody ? ptclPos[i+laneIdx] : pnull);
+          Particle4<real_t> ptcl(ptclPos[min(i+laneIdx,lastBody-1)]);
+          if (i + laneIdx >= lastBody)
+            ptcl.mass() = static_cast<real_t>(0.0f);
 
           addBoxSize(rmin, rmax, ptcl);
 #if 0
@@ -277,7 +280,7 @@ void Treecode<real_t, NLEAF>::computeMultipoles()
       nflops*SCALESP/1e9/dt,
       nflops*(SCALESP+SCALEDP)/1e9/dt);
 
-#if 1
+#if 0
   {
     std::vector<float4> cellSize(nCells), cellMonopole(nCells);
     std::vector<float4> cellQuad0(nCells);
