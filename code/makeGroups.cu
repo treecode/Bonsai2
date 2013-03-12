@@ -37,7 +37,7 @@ namespace makeGroups
       zi = (crd.z & mask) & 1;
 #endif
 
-#if 1
+#if 0
       const int index = (xi << 2) + (yi << 1) + zi;
 #else
       const int index = (xi+xi+xi+xi) + (yi+yi) + zi;
@@ -78,10 +78,10 @@ namespace makeGroups
         Cvalue = C[2];
       }   
 
-#if 1
+#if 0
       key = (key << 3) + C[index];
 #else
-      key = (key+key+key) + Cvalue;
+      key = (key<<3) + Cvalue;
 #endif
 
 #if 0

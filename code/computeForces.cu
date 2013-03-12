@@ -200,7 +200,7 @@ namespace computeForces
       float4 acc, 
       const float3 pos,
       const float mass, const float3 com,
-      const float4 Q0,  const float4 Q1, float eps2) 
+      const float4 Q0,  const float2 Q1, float eps2) 
   {
     const float3 dr = make_float3(pos.x - com.x, pos.y - com.y, pos.z - com.z);
     const float  r2 = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z + eps2;
@@ -220,9 +220,9 @@ namespace computeForces
     const float q11 = Q0.x;
     const float q22 = Q0.y;
     const float q33 = Q0.z;
-    const float q12 = Q1.x;
-    const float q13 = Q1.y;
-    const float q23 = Q1.z;
+    const float q12 = Q0.w;
+    const float q13 = Q1.x;
+    const float q23 = Q1.y;
 
     const float  q  = q11 + q22 + q33;
     const float3 qR = make_float3(
@@ -258,7 +258,7 @@ namespace computeForces
       const float4 M0 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 
-//#pragma unroll
+#pragma unroll
       for (int j = 0; j < WARP_SIZE; j++)
       {
         const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
@@ -280,23 +280,27 @@ namespace computeForces
         const float eps2)
     {
 #if 1
-      float4 M0, Q0, Q1;
+      float4 M0, Q0;
+      float2 Q1;
       if (FULL || cellIdx >= 0)
       {
         M0 = tex1Dfetch(texCellMonopole, cellIdx);
         const Quadrupole<float> Q(tex1Dfetch(texCellQuad0,cellIdx), tex1Dfetch(texCellQuad1,cellIdx));
-        Q0 = make_float4(Q.xx(), Q.yy(), Q.zz(), 0.0f);
-        Q1 = make_float4(Q.xy(), Q.xz(), Q.yz(), 0.0f);
+        Q0 = Q.get_q0();
+        Q1 = Q.get_q1();
       }
       else
-        M0 = Q0 = Q1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      {
+        M0 = Q0 =make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        Q1 = make_float2(0.0f, 0.0f);
+      }
 
 //#pragma unroll
       for (int j = 0; j < WARP_SIZE; j++)
       {
         const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
-        const float4 jQ0 = make_float4(__shfl(Q0.x, j), __shfl(Q0.y, j), __shfl(Q0.z, j), 0.0f);
-        const float4 jQ1 = make_float4(__shfl(Q1.x, j), __shfl(Q1.y, j), __shfl(Q1.z, j), 0.0f);
+        const float4 jQ0 = make_float4(__shfl(Q0.x, j), __shfl(Q0.y, j), __shfl(Q0.z, j), __shfl(Q0.w,j));
+        const float2 jQ1 = make_float2(__shfl(Q1.x, j), __shfl(Q1.y, j));
         const float  jmass = jM0.w;
         const float3 jpos  = make_float3(jM0.x, jM0.y, jM0.z);
 #pragma unroll
@@ -378,22 +382,22 @@ namespace computeForces
 
         {
           const int firstChild = cellData.first();
-          const int nChildren  = cellData.n();
+          const int nChild= cellData.n();
           bool splitNode  = isNode && splitCell && useCell;
 
           /* use exclusive scan to compute scatter addresses for each of the child cells */
-          const int2 childScatter = warpIntExclusiveScan(nChildren & (-splitNode));
+          const int2 childScatter = warpIntExclusiveScan(nChild & (-splitNode));
 
           /* make sure we still have available stack space */
           if (childScatter.y + nCells - cellListBlock > (CELL_LIST_MEM_PER_WARP<<SHIFT))
             return make_uint2(0xFFFFFFFF,0xFFFFFFFF);
 
-#if 1
+#if 0
           /* if so populate next level stack in gmem */
           if (splitNode)
           {
             const int scatterIdx = cellListOffset + nCells + nextLevelCellCounter + childScatter.x;
-            for (int i = 0; i < nChildren; i++)
+            for (int i = 0; i < nChild; i++)
               cellList[ringAddr<SHIFT>(scatterIdx + i)] = firstChild + i;
           }
 #else  /* use scan operation to accomplish steps above, doesn't bring performance benefit */
@@ -734,13 +738,13 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   const int NTHREAD  = 1<<NTHREAD2;
   cuda_mem<int> d_gmem_pool;
 
-  const int nblock = 16*13;
+  const int nblock = 8*13;
   printf("---1--\n");
   d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(NTHREAD/WARP_SIZE));
   printf("---2--\n");
 
   CUDA_SAFE_CALL(cudaMemset(d_interactions, 0, sizeof(uint2)*nPtcl));
-  const int starting_level = 1;
+  const int starting_level = 2;
   int value = 0;
   cudaDeviceSynchronize();
   const double t0 = rtc();
