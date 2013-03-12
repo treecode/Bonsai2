@@ -76,7 +76,8 @@ struct CellData
 
     __host__ __device__ void update_first(const int first) 
     {
-      packed_data.y = first | ((unsigned int)n() << NLEAF_SHIFT);
+      const int _n = n()-1;
+      packed_data.y = first | ((unsigned int)_n << NLEAF_SHIFT);
     }
 };
 

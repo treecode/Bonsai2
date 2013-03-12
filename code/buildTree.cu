@@ -873,7 +873,7 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 
   /* sort nodes by level */
-#if 0
+#if 1
   {
     cudaDeviceSynchronize();
     const double t0 = rtc();
@@ -899,7 +899,7 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 #endif
 
-#if 1
+#if 0
   { /* print tree structure */
     fprintf(stderr, " ncells= %d nLevels= %d  nNodes= %d nLeaves= %d (%d) \n", nCells, nLevels, nNodes, nLeaves, nNodes+nLeaves);
 
@@ -933,8 +933,8 @@ void Treecode<real_t, NLEAF>::buildTree()
       printf("level= %d  ncells= %d   %d %d \n", i, lv.y-lv.x+1, lv.x, lv.y+1);
     }
 
-#if 0
-    for (int i = 0; i < 100; i++)
+#if 1
+    for (int i = 0; i < nCells; i++)
     {
       printf("cellIdx= %d  isNode= %s: first= %d  n= %d  pbeg= %d  pend =%d\n",
           i, cells[i].isNode() ? "true ":"false",
