@@ -596,19 +596,8 @@ namespace computeForces
       int *shmem = shmem_pool + sh_offs;
       int *gmem  =  gmem_pool + CELL_LIST_MEM_PER_WARP*((1<<NWARP2)*blockIdx.x + warpIdx);
 
-#if 1
       int2 top_cells = level_begIdx[start_level];
       top_cells.y++;
-#else
-      const int2 top_cells = {0,8};
-#endif
-
-#if 0
-      if (warpIdx > 0) return;
-      assert(blockIdx.x == 0);
-      assert(threadIdx.x < WARP_SIZE);
-#endif
-
 
       while(1)
       {
@@ -623,10 +612,7 @@ namespace computeForces
         const int pbeg = group.pbeg();
         const int np   = group.np();
 
-        assert(np > 0);
-        assert(np <= WARP_SIZE);
-
-        const int NI = 1;
+        const int NI = 2;
         real3_t iPos[NI];
 
 #pragma unroll
@@ -669,6 +655,12 @@ namespace computeForces
           acc[pidx] = iAcc[0];
           if (INTCOUNT)
             interactions[pidx] = make_int2(counters.x, counters.y);
+        }
+        if (pidx+WARP_SIZE < pbeg + np)
+        {
+          acc[WARP_SIZE+pidx] = iAcc[1];
+          if (INTCOUNT)
+            interactions[WARP_SIZE+pidx] = make_int2(0,0);//counters.x, counters.y);
         }
       }
     }

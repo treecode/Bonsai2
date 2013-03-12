@@ -258,7 +258,7 @@ void Treecode<real_t, NLEAF>::makeGroups()
   thrust::device_ptr<Particle> vals_beg(d_ptclPos_tmp.ptr);
   thrust::sort_by_key(keys_beg, keys_end, vals_beg); 
 
-  const int NGROUP2 = 5;
+  const int NGROUP2 = 6;
   makeGroups::make_groups<NGROUP2><<<nblock,nthread>>>(nPtcl, d_groupList);
 #endif
 
