@@ -1,4 +1,5 @@
 #include "Treecode.h"
+#include <algorithm>
 
 namespace computeForces
 {
@@ -257,7 +258,7 @@ namespace computeForces
       const float4 M0 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 
-#pragma unroll
+//#pragma unroll
       for (int j = 0; j < WARP_SIZE; j++)
       {
         const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
@@ -278,6 +279,7 @@ namespace computeForces
         const int cellIdx,
         const float eps2)
     {
+#if 1
       float4 M0, Q0, Q1;
       if (FULL || cellIdx >= 0)
       {
@@ -289,6 +291,7 @@ namespace computeForces
       else
         M0 = Q0 = Q1 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
+//#pragma unroll
       for (int j = 0; j < WARP_SIZE; j++)
       {
         const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
@@ -300,6 +303,7 @@ namespace computeForces
         for (int k = 0; k < NI; k++)
           acc_i[k] = add_acc(acc_i[k], pos_i[k], jmass, jpos, jQ0, jQ1, eps2);
       }
+#endif
     }
 
 
@@ -775,15 +779,35 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
 
 
   double2 interactions = make_double2(0.0,0.0);
+  double2 direct_minmax = make_double2(1e10,-1);
+  double2 approx_minmax = make_double2(1e10,-1);
   if (INTCOUNT)
   {
     std::vector<int2> h_interactions(nPtcl);
+    std::vector<int>  h_approx(nPtcl), h_direct(nPtcl);
     d_interactions.d2h(&h_interactions[0]);
     for (int i = 0; i < nPtcl; i++)
     {
       interactions.x += (double)h_interactions[i].x;
       interactions.y += (double)h_interactions[i].y;
+      h_approx[i] = h_interactions[i].x;
+      h_direct[i] = h_interactions[i].y;
+      direct_minmax.x = std::min(direct_minmax.x, (double)h_interactions[i].y);
+      direct_minmax.y = std::max(direct_minmax.y, (double)h_interactions[i].y);
+      approx_minmax.x = std::min(approx_minmax.x, (double)h_interactions[i].x);
+      approx_minmax.y = std::max(approx_minmax.y, (double)h_interactions[i].x);
     }
+    std::sort(h_approx.begin(), h_approx.end());
+    std::sort(h_direct.begin(), h_direct.end());
+    for (int i = 0; i < 100; i += 10)
+    {
+      printf("i= %d:  direct= %d %d   approx= %d %d \n",
+          i, 
+          h_direct[i], h_direct[nPtcl-i-1],
+          h_approx[i], h_approx[nPtcl-i-1]);
+    }
+    printf("direct: min= %g  max= %g \n", direct_minmax.x, direct_minmax.y);
+    printf("approx: min= %g  max= %g \n", approx_minmax.x, approx_minmax.y);
   }
 
 #if 1

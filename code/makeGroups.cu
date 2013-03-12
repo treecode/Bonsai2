@@ -27,7 +27,7 @@ namespace makeGroups
 #pragma unroll
     for(i = 0; i < NBITS; i++, mask >>= 1)
     {
-#if 0
+#if 1
       xi = (crd.x & mask) ? 1 : 0;
       yi = (crd.y & mask) ? 1 : 0;
       zi = (crd.z & mask) ? 1 : 0;        
@@ -37,7 +37,7 @@ namespace makeGroups
       zi = (crd.z & mask) & 1;
 #endif
 
-#if 0
+#if 1
       const int index = (xi << 2) + (yi << 1) + zi;
 #else
       const int index = (xi+xi+xi+xi) + (yi+yi) + zi;
@@ -78,7 +78,7 @@ namespace makeGroups
         Cvalue = C[2];
       }   
 
-#if 0
+#if 1
       key = (key << 3) + C[index];
 #else
       key = (key+key+key) + Cvalue;
@@ -128,9 +128,9 @@ namespace makeGroups
           domain.centre.y - domain.hsize,
           domain.centre.z - domain.hsize);
 
-      const int xc = static_cast<int>((ptcl.x() - bmin.x) * inv_domain_size);
-      const int yc = static_cast<int>((ptcl.y() - bmin.y) * inv_domain_size);
-      const int zc = static_cast<int>((ptcl.z() - bmin.z) * inv_domain_size);
+      const int xc = static_cast<int>((ptcl.x() - bmin.x) * inv_domain_size * (1<<NBINS));
+      const int yc = static_cast<int>((ptcl.y() - bmin.y) * inv_domain_size * (1<<NBINS));
+      const int zc = static_cast<int>((ptcl.z() - bmin.z) * inv_domain_size * (1<<NBINS));
 
 
       keys  [idx] = get_key<NBINS>(make_int3(xc,yc,zc));
@@ -218,7 +218,12 @@ void Treecode<real_t, NLEAF>::makeGroups()
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(makeGroups::groupCounter, &nGroups, sizeof(int)));
 
 #if 0
-#if 1
+  d_ptclPos_tmp.h2d(&ptcl0[0]);
+#else
+  d_ptclPos.d2d(d_ptclPos_tmp);
+#endif
+
+#if 0
   const int nblock  = (nPtcl-1)/nthread + 1;
   const int NBINS = 21; 
   cuda_mem<Particle> d_ptcl0;
@@ -234,26 +239,18 @@ void Treecode<real_t, NLEAF>::makeGroups()
   makeGroups::shuffle_ptcl<real_t><<<nblock,nthread>>>(nPtcl, d_values, d_ptcl0, d_ptclPos_tmp);
  
   const int NGROUP2 = 5;
-#if 1
   makeGroups::make_groups<NGROUP2><<<nblock,nthread>>>(nPtcl, d_groupList);
-#else
-  makeGroups::make_groups<NGROUP2><<<1,nthread>>>(nPtcl, d_groupList);
 #endif
-#else
+
+#if 0
   const int nblock = (nCells-1)/nthread + 1;
   makeGroups::make_groups<<<nblock,nthread>>>(nCells, d_cellDataList, d_groupList);
-#endif
 #endif
 
 #if 1
   const int nblock  = (nPtcl-1)/nthread + 1;
   const int NBINS = 21; 
 
-#if 0
-  d_ptclPos_tmp.h2d(&ptcl0[0]);
-#else
-  d_ptclPos.d2d(d_ptclPos_tmp);
-#endif
   makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos_tmp, d_keys, d_values);
 
   thrust::device_ptr<unsigned long long> keys_beg(d_keys);
