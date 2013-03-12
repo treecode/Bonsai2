@@ -161,9 +161,13 @@ namespace computeForces
     dr.z += fabsf(dr.z); dr.z *= 0.5f;
 
     //Distance squared, no need to do sqrt since opening criteria has been squared
-    const float ds2    = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z;
+    const float ds2 = dr.x*dr.x + dr.y*dr.y + dr.z*dr.z;
 
+#if 1
     return (ds2 <= fabsf(cellSize.w));
+#else
+    return true;
+#endif
   }
 
   /******* force due to monopoles *********/
@@ -317,7 +321,7 @@ namespace computeForces
       for (int i = 0; i < NI; i++)
         pos_i[i] = _pos_i[i];
 
-      uint2 interactionCounters = {0}; /* # of approximate and exact force evaluations */
+      uint2 interactionCounters = {0,0}; /* # of approximate and exact force evaluations */
 
       volatile int *tmpList = shmem;
 
@@ -362,18 +366,9 @@ namespace computeForces
         }
 #endif
 
-#if 1
-        const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize);
-#else  /* test tree-walk down to each leaf */
-        const bool splitCell = true;
-#endif
-
-        /* compute first child, either a cell if node or a particle if leaf */
-#if 0
-        const int cellData = __float_as_int(cellSize.w);
-        const int firstChild =  cellData & 0x0FFFFFFF;
-        const int nChildren  = (cellData & 0xF0000000) >> 28;
-#endif
+        const bool splitCell = 
+          split_node_grav_impbh(cellSize, groupCentre, groupSize) || 
+          (cellData.pend() - cellData.pbeg() < 0);
 
         /**********************************************/
         /* split cells that satisfy opening condition */
@@ -404,7 +399,7 @@ namespace computeForces
 #else  /* use scan operation to accomplish steps above, doesn't bring performance benefit */
           int nChildren  = childScatter.y;
           int nProcessed = 0;
-          int2 scanVal   = {0};
+          int2 scanVal   = {0,0};
           const int offset = cellListOffset + nCells + nextLevelCellCounter;
           while (nChildren > 0)
           {
@@ -474,7 +469,7 @@ namespace computeForces
           const int2 childScatter = warpIntExclusiveScan(nBody & (-isDirect));
           int nParticle  = childScatter.y;
           int nProcessed = 0;
-          int2 scanVal   = {0};
+          int2 scanVal   = {0,0};
 
           /* conduct segmented scan for all leaves that need to be expanded */
           while (nParticle > 0)
@@ -540,7 +535,7 @@ namespace computeForces
       {
         approxAcc<NI,false>(acc_i, pos_i, laneIdx < approxCounter ? approxCellIdx : -1, eps2);
         if (INTCOUNT)
-          interactionCounters.x += WARP_SIZE*NI; //approxCounter * NI;
+          interactionCounters.x += approxCounter * NI;
         approxCounter = 0;
       }
 #endif
@@ -550,7 +545,7 @@ namespace computeForces
       {
         directAcc<NI,false>(acc_i, pos_i, laneIdx < directCounter ? directPtclIdx : -1, eps2);
         if (INTCOUNT)
-          interactionCounters.y += WARP_SIZE*NI; //directCounter * NI;
+          interactionCounters.y += directCounter * NI;
         directCounter = 0;
       }
 #endif
@@ -614,12 +609,13 @@ namespace computeForces
 #pragma unroll
         for (int i = 0; i < NI; i++)
         {
+          assert(i==0);
           const Particle4<real_t> ptcl = ptclPos[min(pbeg + i*WARP_SIZE+laneIdx, pbeg+np-1)];
           iPos[i] = make_float3(ptcl.x(), ptcl.y(), ptcl.z());
         }
 
         real3_t rmin = {iPos[0].x, iPos[0].y, iPos[0].z};
-        real3_t rmax = rmin;
+        real3_t rmax = rmin; 
 
 #pragma unroll
         for (int i = 0; i < NI; i++) 
@@ -632,15 +628,30 @@ namespace computeForces
         rmax.y = __shfl(rmax.y,0);
         rmax.z = __shfl(rmax.z,0);
 
+
 #if 0
-        if (laneIdx == 0)
+//        if (laneIdx == 0)
           printf("groupIdx= %d: rmin= %g %g %g  rmax= %g %g %g \n",
               groupIdx, rmin.x, rmin.y, rmin.z, rmax.x, rmax.y, rmax.z);
+          assert(0);
 #endif
 
         const real_t half = static_cast<real_t>(0.5f);
         const real3_t cvec = {half*(rmax.x+rmin.x), half*(rmax.y+rmin.y), half*(rmax.z+rmin.z)};
         const real3_t hvec = {half*(rmax.x-rmin.x), half*(rmax.y-rmin.y), half*(rmax.z-rmin.z)};
+#if 0
+        const real_t h = fmaxf(hvec.x, fmaxf(hvec.y, hvec.z));
+        assert(h < 1);
+#endif
+
+        assert(iPos[0].x <= rmax.x);
+        assert(iPos[0].x >= rmin.x);
+
+        assert(iPos[0].y <= rmax.y);
+        assert(iPos[0].y >= rmin.y);
+        
+        assert(iPos[0].z <= rmax.z);
+        assert(iPos[0].z >= rmin.z);
 
         const int SHIFT = 0;
 
@@ -660,9 +671,9 @@ namespace computeForces
         assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
 
         const int pidx = pbeg + laneIdx;
-        if (pidx < nPtcl)
+        if (pidx < pbeg + np)
         {
-          acc         [pidx] = iAcc[0];
+          acc[pidx] = iAcc[0];
           if (INTCOUNT)
             interactions[pidx] = make_int2(counters.x, counters.y);
         }
@@ -702,13 +713,58 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   if (INTCOUNT)
     d_interactions.alloc(nPtcl);
 
+#if 0
+  {
+    std::vector<Particle4<real_t> > h_ptcl(nPtcl);
+    std::vector<GroupData> h_group(nGroups, make_int2(0,0));
+    d_ptclPos.d2h(&h_ptcl[0]);
+    d_groupList.d2h(&h_group[0], nGroups);
+#if 1
+    for (int i = 0; i < nGroups; i++)
+    {
+      const GroupData group = h_group[i];
+      const int pbeg = group.pbeg();
+      const int np   = group.np();
+      float3 rmin = {h_ptcl[pbeg].x(), h_ptcl[pbeg].y(), h_ptcl[pbeg].z()};
+      float3 rmax = rmin;
+      for (int j = pbeg; j < pbeg+np; j++)
+      {
+        const Particle4<real_t> ptcl = h_ptcl[j];
+        rmin.x = std::min(rmin.x, ptcl.x());
+        rmin.y = std::min(rmin.y, ptcl.y());
+        rmin.z = std::min(rmin.z, ptcl.z());
+        rmax.x = std::max(rmax.x, ptcl.x());
+        rmax.y = std::max(rmax.y, ptcl.y());
+        rmax.z = std::max(rmax.z, ptcl.z());
+      }
+      const float3 hsize = {0.5*(rmax.x - rmin.x), 0.5*(rmax.y-rmin.y), 0.5*(rmax.z-rmin.z)};
+      const float hmin = std::min(hsize.x, std::min(hsize.y,hsize.z));
+      const float hmax = std::max(hsize.x, std::max(hsize.y,hsize.z));
+      printf("group= %d  pbeg;pend= %d;%d  hmin= %g  hmax= %g \n", // -- rmin= %g %g %g  rmax= %g %g %g\n",
+          i, pbeg, pbeg+np, hmin, hmax
+#if 0
+          ,rmin.x, rmin.y, rmin.z,
+          rmax.x, rmax.y, rmax.z
+#endif
+          );
+    }
+#else
+    for (int i= 0; i < nPtcl; i++)
+    {
+      const Particle ptcl = h_ptcl[i];
+      printf("idx= %d : x,y,z= %g %g %g \n",
+          i,ptcl.x(), ptcl.y(), ptcl.z());
+    }
+    assert(0);
+#endif
+  }
+#endif
 
   const int NTHREAD2 = 7;
   cuda_mem<int> d_gmem_pool;
 
   const int nblock = 16*13;
-  const int NGROUP2 = 5;
-  d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(1<<(NTHREAD2-NGROUP2)));
+  d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(1<<(NTHREAD2-WARP_SIZE2)));
 
   const int starting_level = 1;
   int value = 0;
@@ -717,12 +773,13 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(computeForces::retired_groupCount, &value, sizeof(int)));
   computeForces::treewalk<NTHREAD2,true><<<nblock,1<<NTHREAD2>>>(
       nPtcl, nGroups, d_groupList, eps2, starting_level,
-      d_ptclPos_tmp, d_ptclPos_tmp,
+      d_ptclPos, d_ptclPos_tmp,
       d_interactions, d_gmem_pool);
   kernelSuccess("treewalk");
   const double t1 = rtc();
   const double dt = t1 - t0;
   fprintf(stderr, " treewalk done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
+
 
   double2 interactions;
   if (INTCOUNT)

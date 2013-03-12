@@ -193,7 +193,7 @@ namespace multipoles
         M.x *= inv_mass;
         M.y *= inv_mass;
         M.z *= inv_mass;
-#if 0
+#if 1
         Q.xx() = Q.xx()*inv_mass - M.x*M.x;
         Q.yy() = Q.yy()*inv_mass - M.y*M.y;
         Q.zz() = Q.zz()*inv_mass - M.z*M.z;
@@ -215,9 +215,9 @@ namespace multipoles
         const real_t dx = cvec.x - com.x;
         const real_t dy = cvec.y - com.y;
         const real_t dz = cvec.z - com.z;
-        const real_t  s = sqrt(dx*dy + dy*dz + dz*dz);
+        const real_t  s = sqrt(dx*dx + dy*dy + dz*dz);
         const real_t  l = max(static_cast<real_t>(2.0f)*max(hvec.x, max(hvec.y, hvec.z)), static_cast<real_t>(1.0e-6f));
-        const real_t cellOp = (l*inv_theta) + s;
+        const real_t cellOp = l*inv_theta + s;
         const real_t cellOp2 = cellOp*cellOp;
 
         atomicAdd(&nflops, nflop);
@@ -286,6 +286,15 @@ void Treecode<real_t, NLEAF>::computeMultipoles()
     d_cellMonopole.d2h(&cellMonopole[0]);
     d_cellQuad0.d2h(&cellQuad0[0]);
     d_cellQuad1.d2h(&cellQuad1[0]);
+
+#if 0
+    for (int i = 0; i < nCells; i++)
+    {
+      printf("cell= %d:   size= %g %g %g | %g \n",
+          i, cellSize[i].x, cellSize[i].y, cellSize[i].z, cellSize[i].w);
+    }
+    assert(0);
+#endif
 
     float3 bmin = {+1e10f}, bmax = {-1e10f};
     double mtot = 0.0;

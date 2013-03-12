@@ -145,8 +145,8 @@ struct Treecode
 
   Treecode(const real_t _eps = 0.01, const real_t _theta = 0.75)
   {
-    theta = _theta;
     eps2  = _eps*_eps;
+    theta = _theta;
     d_domain.alloc(1);
     d_minmax.alloc(2048);
     d_level_begIdx.alloc(32);  /* max 32 levels */
