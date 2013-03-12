@@ -127,7 +127,8 @@ struct Treecode
   int nPtcl, nLevels, nCells, nLeaves, nNodes, nGroups;
 
   host_mem<Particle> h_ptclPos, h_ptclVel;
-  cuda_mem<Particle> d_ptclPos, d_ptclVel, d_ptclPos_tmp;
+  std::vector<Particle> ptcl0;
+  cuda_mem<Particle> d_ptclPos, d_ptclVel, d_ptclPos_tmp, d_ptclAcc;
   cuda_mem<Box<real_t> > d_domain;
   cuda_mem<Position<real_t> > d_minmax;
   cuda_mem<int2> d_level_begIdx;
@@ -162,6 +163,7 @@ struct Treecode
     d_ptclPos.alloc(nPtcl);
     d_ptclVel.alloc(nPtcl);
     d_ptclPos_tmp.alloc(nPtcl);
+    d_ptclAcc.alloc(nPtcl);
  
     /* allocate stack memory */ 
     node_max = nPtcl/10;
@@ -189,6 +191,9 @@ struct Treecode
   {
     d_ptclPos.h2d(h_ptclPos);
     d_ptclVel.h2d(h_ptclVel);
+    ptcl0.resize(nPtcl);
+    for (int i = 0; i < nPtcl; i++)
+      ptcl0[i] = h_ptclPos[i];
   }
 
   void buildTree();

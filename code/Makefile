@@ -7,11 +7,11 @@ F90  = ifort
 
 CUDA_TK  = /usr/local/cuda
 
-OFLAGS = -O3 -g -Wall 
+OFLAGS = -O3 -g -Wall  
 CXXFLAGS =   $(OFLAGS)  -Wstrict-aliasing=2 
 
 
-NVCC = $(CUDA_TK)/bin/nvcc  
+NVCC = $(CUDA_TK)/bin/nvcc   -g -O3
 NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35
 NVCCLDFLAGS = -lcudadevrt -arch=sm_35 
 

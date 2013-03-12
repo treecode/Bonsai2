@@ -220,7 +220,7 @@ namespace multipoles
         const real_t dz = cvec.z - com.z;
         const real_t  s = sqrt(dx*dx + dy*dy + dz*dz);
         const real_t  l = max(static_cast<real_t>(2.0f)*max(hvec.x, max(hvec.y, hvec.z)), static_cast<real_t>(1.0e-6f));
-        const real_t cellOp = l*inv_theta + s;
+        const real_t cellOp = s*inv_theta + s;
         const real_t cellOp2 = cellOp*cellOp;
 
         atomicAdd(&nflops, nflop);

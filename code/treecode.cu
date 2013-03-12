@@ -121,8 +121,11 @@ int main(int argc, char * argv[])
   tree.computeMultipoles();
   tree.makeGroups();
 #if 1
-  const double2 interactions = tree.computeForces(true);
-  fprintf(stderr, " direct= %g   approx= %g \n", interactions.y/tree.nPtcl, interactions.x/tree.nPtcl);
+  for (int k = 0; k < 3; k++)
+  {
+    const double2 interactions = tree.computeForces(true);
+    fprintf(stderr, " direct= %g   approx= %g \n", interactions.y/tree.nPtcl, interactions.x/tree.nPtcl);
+  }
 #else
   tree.computeForces();
 #endif

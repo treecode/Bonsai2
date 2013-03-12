@@ -899,6 +899,87 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 #endif
 
+#if 0  /* tree consistency */
+  {
+    std::vector<char> cells_storage(sizeof(CellData)*nCells);
+    CellData *cells = (CellData*)&cells_storage[0];
+    d_cellDataList.d2h(&cells[0], nCells);
+    int2 levels[32];
+    d_level_begIdx.d2h(levels);
+    std::vector<unsigned long long> keys(nPtcl);
+    for (int i= 1; i < 32; i++)
+    {
+      const int2 lv = levels[i];
+      if (lv.y == 0) break;
+      int jk = 0;
+      for (int j = lv.x; j <= lv.y; j++)
+        keys[jk++] = ((unsigned long long)cells[j].pbeg() << 32) | cells[j].pend();
+//      thrust::sort(&keys[0], &keys[jk]);
+      int np = 0;
+      for (int j = 0; j < jk ;j++)
+      {
+        const int pbeg = keys[j] >> 32;
+        const int pend = keys[j] & 0xFFFFFFFF;
+        np += pend-pbeg;
+        printf("  cell= %d: np= %d: pbeg= %d  pend= %d \n", j, pend-pbeg, pbeg, pend);
+      }
+      printf("level= %d  ncells= %d   %d %d :: np= %d\n", i, lv.y-lv.x+1, lv.x, lv.y+1,np);
+    }
+
+    fflush(stdout);
+    assert(0);
+
+  }
+#endif
+
+#if 0  /* tree consistency */
+  {
+    std::vector<char> cells_storage(sizeof(CellData)*nCells);
+    CellData *cells = (CellData*)&cells_storage[0];
+    d_cellDataList.d2h(&cells[0], nCells);
+    int2 levels[32];
+    d_level_begIdx.d2h(levels);
+    std::vector<unsigned long long> keys(nPtcl);
+    std::vector<int> currLevel, nextLevel;
+    currLevel.reserve(nPtcl);
+    nextLevel.reserve(nPtcl);
+    for (int i = 0; i < 8; i++)
+      currLevel.push_back(i);
+
+    cnt++;
+    for (int lev = 0; lev < 6; lev++)
+    {
+      for (int i = 0; i < (int)currLevel.size(); i++)
+      {
+      }
+    }
+
+
+    for (int i= 1; i < 32; i++)
+    {
+      const int2 lv = levels[i];
+      if (lv.y == 0) break;
+      int jk = 0;
+      for (int j = lv.x; j <= lv.y; j++)
+        keys[jk++] = ((unsigned long long)cells[j].pbeg() << 32) | cells[j].pend();
+//      thrust::sort(&keys[0], &keys[jk]);
+      int np = 0;
+      for (int j = 0; j < jk ;j++)
+      {
+        const int pbeg = keys[j] >> 32;
+        const int pend = keys[j] & 0xFFFFFFFF;
+        np += pend-pbeg;
+        printf("  cell= %d: np= %d: pbeg= %d  pend= %d \n", j, pend-pbeg, pbeg, pend);
+      }
+      printf("level= %d  ncells= %d   %d %d :: np= %d\n", i, lv.y-lv.x+1, lv.x, lv.y+1,np);
+    }
+
+    fflush(stdout);
+    assert(0);
+
+  }
+#endif
+
 #if 0
   { /* print tree structure */
     fprintf(stderr, " ncells= %d nLevels= %d  nNodes= %d nLeaves= %d (%d) \n", nCells, nLevels, nNodes, nLeaves, nNodes+nLeaves);
@@ -908,13 +989,19 @@ void Treecode<real_t, NLEAF>::buildTree()
     d_cellDataList.d2h(&cells[0], nCells);
 
     int cellL[33] = {0};
+    int np=0;
     for (int i = 0; i < nCells; i++)
     {
       const CellData cell = cells[i];
       assert(cell.level() >= 0);
       assert(cell.level() < 32);
-      cellL[cell.level()]++;
+
+      if (cell.isNode())
+        assert(cell.first() + cell.n() <= nCells);
+      else
+        np += cell.pend() - cell.pbeg();
     }
+    fprintf(stderr, "np_leaf= %d\n", np);
     int addr = 0;
     int nlev = 0;
     for (int i= 0; i < 32; i++)
@@ -936,11 +1023,13 @@ void Treecode<real_t, NLEAF>::buildTree()
 #if 1
     for (int i = 0; i < nCells; i++)
     {
-      printf("cellIdx= %d  isNode= %s: first= %d  n= %d  pbeg= %d  pend =%d\n",
-          i, cells[i].isNode() ? "true ":"false",
+      printf("cellIdx= %d  isNode= %s: lev= %d first= %d  n= %d  pbeg= %d  pend =%d\n",
+          i, cells[i].isNode() ? "true ":"false", cells[i].level(),
           cells[i].first(), cells[i].n(), cells[i].pbeg(), cells[i].pend());
     }
 #endif
+    fflush(stdout);
+    assert(0);
 
   }
 #endif

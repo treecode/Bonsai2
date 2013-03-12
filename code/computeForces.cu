@@ -370,9 +370,13 @@ namespace computeForces
         }
 #endif
 
-        const bool splitCell = 
-          split_node_grav_impbh(cellSize, groupCentre, groupSize) || 
-          (cellData.pend() - cellData.pbeg() < 0);
+
+#if 0
+        const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize) ||
+          (cellData.pend() - cellData.pbeg() < 4);
+#else
+        const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize);
+#endif
 
         /**********************************************/
         /* split cells that satisfy opening condition */
@@ -390,7 +394,11 @@ namespace computeForces
 
           /* make sure we still have available stack space */
           if (childScatter.y + nCells - cellListBlock > (CELL_LIST_MEM_PER_WARP<<SHIFT))
+          {
+            assert(0);
             return make_uint2(0xFFFFFFFF,0xFFFFFFFF);
+          }
+
 
 #if 1
           /* if so populate next level stack in gmem */
@@ -598,6 +606,13 @@ namespace computeForces
       const int2 top_cells = {0,8};
 #endif
 
+#if 0
+      if (warpIdx > 0) return;
+      assert(blockIdx.x == 0);
+      assert(threadIdx.x < WARP_SIZE);
+#endif
+
+
       while(1)
       {
         int groupIdx = 0;
@@ -640,44 +655,17 @@ namespace computeForces
         rmax.z = __shfl(rmax.z,0);
 
 
-#if 0
-//        if (laneIdx == 0)
-          printf("groupIdx= %d: rmin= %g %g %g  rmax= %g %g %g \n",
-              groupIdx, rmin.x, rmin.y, rmin.z, rmax.x, rmax.y, rmax.z);
-          assert(0);
-#endif
 
         const real_t half = static_cast<real_t>(0.5f);
         const real3_t cvec = {half*(rmax.x+rmin.x), half*(rmax.y+rmin.y), half*(rmax.z+rmin.z)};
         const real3_t hvec = {half*(rmax.x-rmin.x), half*(rmax.y-rmin.y), half*(rmax.z-rmin.z)};
-#if 0
-        const real_t h = fmaxf(hvec.x, fmaxf(hvec.y, hvec.z));
-        assert(h < 1);
-#endif
-
-        assert(iPos[0].x <= rmax.x);
-        assert(iPos[0].x >= rmin.x);
-
-        assert(iPos[0].y <= rmax.y);
-        assert(iPos[0].y >= rmin.y);
-        
-        assert(iPos[0].z <= rmax.z);
-        assert(iPos[0].z >= rmin.z);
 
         const int SHIFT = 0;
 
-        real4_t fnull = {static_cast<real_t>(0.0f)};
-        real4_t iAcc[NI] = {fnull};
+        real4_t iAcc[NI] = {vec<4,real_t>::null()};
 
-#if 1
-        const uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
+        uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
           (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
-#else
-        uint2 counters = {1,1};
-        iAcc[0].x = cvec.x;
-        iAcc[0].y = cvec.y;
-        iAcc[0].z = cvec.z;
-#endif
 
         assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
 
@@ -772,19 +760,23 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
 #endif
 
   const int NTHREAD2 = 7;
+  const int NTHREAD  = 1<<NTHREAD2;
   cuda_mem<int> d_gmem_pool;
 
   const int nblock = 16*13;
-  d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(1<<(NTHREAD2-WARP_SIZE2)));
+  printf("---1--\n");
+  d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(NTHREAD/WARP_SIZE));
+  printf("---2--\n");
 
+  CUDA_SAFE_CALL(cudaMemset(d_interactions, 0, sizeof(uint2)*nPtcl));
   const int starting_level = 1;
   int value = 0;
   cudaDeviceSynchronize();
   const double t0 = rtc();
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(computeForces::retired_groupCount, &value, sizeof(int)));
-  computeForces::treewalk<NTHREAD2,true><<<nblock,1<<NTHREAD2>>>(
+  computeForces::treewalk<NTHREAD2,true><<<nblock,NTHREAD>>>(
       nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
-      d_ptclPos, d_ptclPos_tmp,
+      d_ptclPos_tmp, d_ptclAcc,
       d_interactions, d_gmem_pool);
   kernelSuccess("treewalk");
   const double t1 = rtc();
@@ -792,21 +784,33 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   fprintf(stderr, " treewalk done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
 
 
-  double2 interactions;
+  double2 interactions = make_double2(0.0,0.0);
   if (INTCOUNT)
   {
+    unsigned long long approx = 0;
+    unsigned long long direct = 0;
     std::vector<int2> h_interactions(nPtcl);
     d_interactions.d2h(&h_interactions[0]);
     for (int i = 0; i < nPtcl; i++)
     {
+#if 1
       interactions.x += (double)h_interactions[i].x;
       interactions.y += (double)h_interactions[i].y;
+#else
+      approx += h_interactions[i].x;
+      direct += h_interactions[i].y;
+#endif
     };
+#if 0
+    fprintf(stderr, " direct= %llu,  approx= %llu\n", direct, approx);
+    interactions = make_double2((double)approx, (double)direct);
+#endif
+
   }
 
 #if 1
   std::vector<Particle4<real_t> > h_acc(nPtcl);
-  d_ptclPos_tmp.d2h(&h_acc[0]);
+  d_ptclAcc.d2h(&h_acc[0]);
   double gpot = 0.0;
   double3 gacc = {0.0};
   const real_t mass = 1.0/nPtcl;

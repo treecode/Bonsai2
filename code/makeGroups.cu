@@ -173,6 +173,14 @@ namespace makeGroups
         const int idx = atomicAdd(&groupCounter,1);
         groupList[idx] = GroupData(firstPtcl, min(NGROUP, n-firstPtcl));
       }
+
+#if 0
+      int j = 0;
+      for (int i = 0; i < n; i += 32)
+        groupList[j++] = GroupData(i, min(32, n-i));
+      groupCounter = j;
+
+#endif
     }
 
   static __global__
@@ -212,21 +220,29 @@ void Treecode<real_t, NLEAF>::makeGroups()
 #if 1
   const int nblock  = (nPtcl-1)/nthread + 1;
   const int NBINS = 21; 
-  makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos, d_keys, d_values);
+  cuda_mem<Particle> d_ptcl0;
+  d_ptcl0.alloc(nPtcl);
+  d_ptcl0.h2d(&ptcl0[0]);
+  makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptcl0, d_keys, d_values);
 
   thrust::device_ptr<unsigned long long> keys_beg(d_keys);
   thrust::device_ptr<unsigned long long> keys_end(d_keys + nPtcl);
   thrust::device_ptr<int> vals_beg(d_values);
-  thrust::sort_by_key(keys_beg, keys_end, vals_beg); 
+  thrust::stable_sort_by_key(keys_beg, keys_end, vals_beg); 
 
-  makeGroups::shuffle_ptcl<real_t><<<nblock,nthread>>>(nPtcl, d_values, d_ptclPos, d_ptclPos_tmp);
+  makeGroups::shuffle_ptcl<real_t><<<nblock,nthread>>>(nPtcl, d_values, d_ptcl0, d_ptclPos_tmp);
  
   const int NGROUP2 = 5;
+#if 1
   makeGroups::make_groups<NGROUP2><<<nblock,nthread>>>(nPtcl, d_groupList);
+#else
+  makeGroups::make_groups<NGROUP2><<<1,nthread>>>(nPtcl, d_groupList);
+#endif
 #else
   const int nblock = (nCells-1)/nthread + 1;
   makeGroups::make_groups<<<nblock,nthread>>>(nCells, d_cellDataList, d_groupList);
 #endif
+
 
   kernelSuccess("makeGroups");
   const double t1 = rtc();
