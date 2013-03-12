@@ -367,12 +367,8 @@ namespace computeForces
         const float4   cellSize = tex1Dfetch(texCellSize, cellIdx);
         const CellData cellData = tex1Dfetch(texCellData, cellIdx);
 
-#if 1
         const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize) ||
-          (cellData.pend() - cellData.pbeg() < 4);
-#else
-        const bool splitCell = split_node_grav_impbh(cellSize, groupCentre, groupSize);
-#endif
+          (cellData.pend() - cellData.pbeg() < 3); /* force to open leaves with less than 3 particles */
 
         /**********************************************/
         /* split cells that satisfy opening condition */
@@ -587,7 +583,7 @@ namespace computeForces
       const int NWARP2 = NTHREAD2 - WARP_SIZE2;
       const int sh_offs = (shMemSize >> NWARP2) * warpIdx;
       int *shmem = shmem_pool + sh_offs;
-      int *gmem  =  gmem_pool + CELL_LIST_MEM_PER_WARP*((1<<NWARP2)*blockIdx.x + warpIdx);
+      int *gmem  =  gmem_pool + CELL_LIST_MEM_PER_WARP*((blockIdx.x<<NWARP2) + warpIdx);
 
       int2 top_cells = level_begIdx[start_level];
       top_cells.y++;
@@ -637,7 +633,7 @@ namespace computeForces
 
         real4_t iAcc[NI] = {vec<4,real_t>::null()};
 
-        uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
+        const uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
           (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
 
         assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
@@ -743,8 +739,9 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(NTHREAD/WARP_SIZE));
   printf("---2--\n");
 
+  CUDA_SAFE_CALL(cudaMemset(d_ptclAcc, 0, sizeof(Particle)*nPtcl));
   CUDA_SAFE_CALL(cudaMemset(d_interactions, 0, sizeof(uint2)*nPtcl));
-  const int starting_level = 2;
+  const int starting_level = 3;
   int value = 0;
   cudaDeviceSynchronize();
   const double t0 = rtc();
