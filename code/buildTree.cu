@@ -168,7 +168,7 @@ namespace treeBuild
 
         if (threadIdx.x == 0)
         {
-#if 1
+#if 0
           printf("bmin= %g %g %g \n", bmin.x, bmin.y, bmin.z);
           printf("bmax= %g %g %g \n", bmax.x, bmax.y, bmax.z);
 #endif
@@ -665,6 +665,7 @@ namespace treeBuild
       ptclVel_tmp  = (void*)d_ptclVel;
 
       memPool = stack_memory_pool;
+#if 0
       printf("n=          %d\n", n);
       printf("d_node_max= %d\n", d_node_max);
       printf("d_cell_max= %d\n", d_cell_max);
@@ -673,6 +674,7 @@ namespace treeBuild
           domain->centre.y,
           domain->centre.z,
           domain->hsize);
+#endif
 
       int *octCounter = new int[8+8];
       for (int k = 0; k < 16; k++)
@@ -681,6 +683,7 @@ namespace treeBuild
       assert(cudaGetLastError() == cudaSuccess);
       cudaDeviceSynchronize();
 
+#if 1
       int total = 0;
       for (int k = 8; k < 16; k++)
       {
@@ -688,6 +691,7 @@ namespace treeBuild
         total += octCounter[k];
       }
       printf("total= %d  n= %d\n", total, n);
+#endif
 
       int *octCounterN = new int[8+8+8+64+8];
 #pragma unroll
@@ -702,9 +706,11 @@ namespace treeBuild
       for (int k = 8; k < 64; k++)
         octCounterN[8+16+k] = 0;
 
+#if 0
       for (int k = 0; k < 8; k++)
         printf("k= %d n = %d offset= %d \n",
             k, octCounterN[8+k], octCounterN[8+8+k]);
+#endif
 
 #ifdef IOCOUNT
       io_words = 0;
@@ -971,7 +977,7 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 #endif
 
-#if 1
+#if 0
   { /* print tree structure */
     fprintf(stderr, " ncells= %d nLevels= %d  nNodes= %d nLeaves= %d (%d) \n", nCells, nLevels, nNodes, nLeaves, nNodes+nLeaves);
 

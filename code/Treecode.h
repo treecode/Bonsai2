@@ -145,6 +145,8 @@ struct Treecode
   cuda_mem<real4_t> d_cellQuad0;
   cuda_mem<real2_t> d_cellQuad1;
 
+  double grav_potential;
+
   Treecode(const real_t _eps = 0.01, const real_t _theta = 0.75, const int _ncrit = 2*WARP_SIZE)
   {
     eps2  = _eps*_eps;
@@ -200,7 +202,7 @@ struct Treecode
   void buildTree();
   void computeMultipoles();
   void makeGroups(int levelSplit = 1);
-  double2 computeForces(const bool INTCOUNT = false);
+  double4 computeForces(const bool INTCOUNT = false);
   void moveParticles();
   void computeEnergies();
 

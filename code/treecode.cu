@@ -125,8 +125,10 @@ int main(int argc, char * argv[])
 #if 1
   for (int k = 0; k < 1; k++)
   {
-    const double2 interactions = tree.computeForces(true);
-    fprintf(stderr, " direct= %g   approx= %g \n", interactions.y/tree.nPtcl, interactions.x/tree.nPtcl);
+    const double4 interactions = tree.computeForces(true);
+    fprintf(stderr, " direct: <n>= %g  max= %g  approx: <n>=%g max= %g \n",
+        interactions.x, interactions.y, 
+        interactions.z, interactions.w);
   }
 #else
   tree.computeForces();
