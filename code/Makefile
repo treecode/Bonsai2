@@ -62,7 +62,7 @@ clean:
 clean_all:
 	/bin/rm -rf *.o  $(PROG) *.a *.cu_o  *~
 
-$(CUOBJ): Treecode.h Particle4.h
+$(CUOBJ): Treecode.h Particle4.h cuda_primitives.h cudamem.h
 
 
 

@@ -7,41 +7,10 @@
 #include <thrust/device_ptr.h>
 #include <thrust/sort.h>
 
+#include "cuda_primitives.h"
+
 namespace treeBuild
 {
-  static __device__ __forceinline__ uint shfl_scan_add_step(const uint partial, const uint up_offset)
-  {
-    uint result;
-    asm(
-        "{.reg .u32 r0;"
-        ".reg .pred p;"
-        "shfl.up.b32 r0|p, %1, %2, 0;"
-        "@p add.u32 r0, r0, %3;"
-        "mov.u32 %0, r0;}"
-        : "=r"(result) : "r"(partial), "r"(up_offset), "r"(partial));
-    return result;
-  }
-  static __device__ __forceinline__ int lanemask_lt()
-  {
-    int mask;
-    asm("mov.u32 %0, %lanemask_lt;" : "=r" (mask));
-    return mask;
-  }
-  static __device__ __forceinline__ int warpBinReduce(const bool p)
-  {
-    const unsigned int b = __ballot(p);
-    return __popc(b);
-  }
-  static __device__ __forceinline__ int warpBinExclusiveScan1(const bool p)
-  {
-    const unsigned int b = __ballot(p);
-    return __popc(b & lanemask_lt());
-  }
-  static __device__ __forceinline__ int2 warpBinExclusiveScan(const bool p)
-  {
-    const unsigned int b = __ballot(p);
-    return make_int2(__popc(b & lanemask_lt()), __popc(b));
-  }
 
   static __forceinline__ __device__ void computeGridAndBlockSize(dim3 &grid, dim3 &block, const int np)
   {
@@ -67,7 +36,7 @@ namespace treeBuild
   __device__   void *ptclVel_tmp;
 
   template<int NTHREAD2>
-    __device__ float2 minmax_block(float2 sum)
+   static __device__ float2 minmax_block(float2 sum)
     {
       extern __shared__ float shdata[];
       float *shMin = shdata;

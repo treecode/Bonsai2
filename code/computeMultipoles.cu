@@ -1,5 +1,6 @@
 #include "Treecode.h"
-  
+
+#include "cuda_primitives.h"
 
 namespace multipoles
 {
@@ -7,52 +8,6 @@ namespace multipoles
 #if 0  /* just a test case, but works for float only */
 #define _USE_RESTRICT_ 
 #endif
-
-
-  template<typename real_t>
-    static __device__ __forceinline__ real_t shfl_xor(const real_t x, const int lane, const int warpSize = WARP_SIZE);
-
-  template<>
-    static __device__ __forceinline__ double shfl_xor<double>(const double x, const int lane, const int warpSize)
-    {
-      return __hiloint2double(
-          __shfl_xor(__double2hiint(x), lane, warpSize),
-          __shfl_xor(__double2loint(x), lane, warpSize));
-    }
-  template<>
-    static __device__ __forceinline__ float shfl_xor<float>(const float x, const int lane, const int warpSize)
-    {
-      return __shfl_xor(x, lane, warpSize);
-    }
-
-  template<typename real_t>
-    static __device__ __forceinline__ 
-    void addBoxSize(typename vec<3,real_t>::type &_rmin, typename vec<3,real_t>::type &_rmax, const Particle4<real_t> ptcl)
-    {
-      typename vec<3,real_t>::type rmin = {ptcl.x(), ptcl.y(), ptcl.z()};
-      typename vec<3,real_t>::type rmax = rmin;
-
-#pragma unroll
-      for (int i = WARP_SIZE2-1; i >= 0; i--)
-      {
-        rmin.x = min(rmin.x, shfl_xor(rmin.x, 1<<i, WARP_SIZE));
-        rmax.x = max(rmax.x, shfl_xor(rmax.x, 1<<i, WARP_SIZE));
-
-        rmin.y = min(rmin.y, shfl_xor(rmin.y, 1<<i, WARP_SIZE));
-        rmax.y = max(rmax.y, shfl_xor(rmax.y, 1<<i, WARP_SIZE));
-
-        rmin.z = min(rmin.z, shfl_xor(rmin.z, 1<<i, WARP_SIZE));
-        rmax.z = max(rmax.z, shfl_xor(rmax.z, 1<<i, WARP_SIZE));
-      }
-
-      _rmin.x = min(_rmin.x, rmin.x);
-      _rmin.y = min(_rmin.y, rmin.y);
-      _rmin.z = min(_rmin.z, rmin.z);
-
-      _rmax.x = max(_rmax.x, rmax.x);
-      _rmax.y = max(_rmax.y, rmax.y);
-      _rmax.z = max(_rmax.z, rmax.z);
-    }
 
   template<typename treal, typename real_t>
     static __device__ __forceinline__
@@ -176,7 +131,7 @@ namespace multipoles
           if (i + laneIdx >= lastBody)
             ptcl.mass() = static_cast<real_t>(0.0f);
 
-          addBoxSize(rmin, rmax, ptcl);
+          addBoxSize(rmin, rmax, Position<real_t>(ptcl.x(),ptcl.y(),ptcl.z()));
 #if 0
           typedef double treal;
 #else
