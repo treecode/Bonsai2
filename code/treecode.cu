@@ -128,10 +128,16 @@ int main(int argc, char * argv[])
     const double t0 = rtc();
     const double4 interactions = tree.computeForces(true);
     const double dt = rtc() - t0;
+#ifdef QUADRUPOLE
+    const int FLOPS_QUAD = 64;
+#else
+    const int FLOPS_QUAD = 20;
+#endif
+
     fprintf(stderr, " direct: <n>= %g  max= %g  approx: <n>=%g max= %g :: perf= %g TFLOP/s \n",
         interactions.x, interactions.y, 
         interactions.z, interactions.w,
-        (interactions.x*20 + interactions.z*64)*tree.get_nPtcl()/dt/1e12);
+        (interactions.x*20 + interactions.z*FLOPS_QUAD)*tree.get_nPtcl()/dt/1e12);
 
   }
 #else

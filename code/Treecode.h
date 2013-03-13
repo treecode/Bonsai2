@@ -11,6 +11,10 @@
 
 #define __out
 
+#if 1
+#define QUADRUPOLE
+#endif
+
 static void kernelSuccess(const char kernel[] = "kernel")
 {
   cudaDeviceSynchronize();

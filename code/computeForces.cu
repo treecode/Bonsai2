@@ -155,6 +155,7 @@ namespace computeForces
     }
 
   /******* evalue forces from cells *******/
+#ifdef  QUADRUPOLE
   template<int NI, bool FULL>
     static __device__ __forceinline__ void approxAcc(
         float4 acc_i[NI], 
@@ -192,6 +193,34 @@ namespace computeForces
       }
 #endif
     }
+#else
+  template<int NI, bool FULL>
+    static __device__ __forceinline__ void approxAcc(
+        float4 acc_i[NI], 
+        const float3 pos_i[NI],
+        const int cellIdx,
+        const float eps2)
+    {
+#if 1
+#if 1
+      const float4 M0 = (FULL || cellIdx >= 0) ? tex1Dfetch(texCellMonopole, cellIdx) : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#else
+      const float4 M0 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#endif
+
+//#pragma unroll
+      for (int j = 0; j < WARP_SIZE; j++)
+      {
+        const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
+        const float  jmass = jM0.w;
+        const float3 jpos  = make_float3(jM0.x, jM0.y, jM0.z);
+#pragma unroll
+        for (int k = 0; k < NI; k++)
+          acc_i[k] = add_acc(acc_i[k], pos_i[k], jmass, jpos, eps2);
+      }
+#endif
+    }
+#endif
 
 
 
