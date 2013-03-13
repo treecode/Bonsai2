@@ -6,6 +6,15 @@
 namespace makeGroups
 {
 
+  template<typename T>
+    static __global__ void shuffle(const int n, const int *map, const T *in, T *out)
+    {
+      const int gidx = blockDim.x*blockIdx.x + threadIdx.x;
+      if (gidx >= n) return;
+
+      out[gidx] = in[map[gidx]];
+    }
+
   template<int NBITS>
     static __device__ unsigned long long get_key(int3 crd)
     {
@@ -228,14 +237,12 @@ void Treecode<real_t, NLEAF>::makeGroups()
   nGroups = 0;
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(makeGroups::groupCounter, &nGroups, sizeof(int)));
 
-  d_ptclPos.d2d(d_ptclPos_tmp);
-
   const int nblock  = (nPtcl-1)/nthread + 1;
   const int NBINS = 21; 
 
   cudaDeviceSynchronize();
   const double t0 = rtc();
-  makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos_tmp, d_keys, d_values);
+  makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos, d_keys, d_values);
  
   const int levelSplit = 6;  /* pick the coarse segment boundaries at the levelSplit */
   unsigned long long mask= 0;
@@ -250,9 +257,15 @@ void Treecode<real_t, NLEAF>::makeGroups()
   /* sort particles by PH key */
   thrust::device_ptr<unsigned long long> keys_beg(d_keys);
   thrust::device_ptr<unsigned long long> keys_end(d_keys + nPtcl);
-  thrust::device_ptr<Particle> vals_beg(d_ptclPos_tmp.ptr);
+#if 1
+  thrust::device_ptr<int> vals_beg(d_value.ptr);
   thrust::sort_by_key(keys_beg, keys_end, vals_beg); 
-
+  makeGroups::shuffle<Particle><<<nblock,nthread>>>(nPtcl, d_value, d_ptclPos, d_ptclPos_tmp);
+#else
+  thrust::device_ptr<Particle> ptcl(d_ptclPos_tmp.ptr);
+  d_ptclPos.d2d(d_ptclPos_tmp);
+  thrust::sort_by_key(keys_beg, keys_end, ptcl);
+#endif
 
   cuda_mem<int> d_ptclBegIdx, d_ptclEndIdx;
   cuda_mem<unsigned long long> d_keys_inv;

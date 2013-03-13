@@ -741,7 +741,7 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
 
   CUDA_SAFE_CALL(cudaMemset(d_ptclAcc, 0, sizeof(Particle)*nPtcl));
   CUDA_SAFE_CALL(cudaMemset(d_interactions, 0, sizeof(uint2)*nPtcl));
-  const int starting_level = 3;
+  const int starting_level = 1;
   int value = 0;
   cudaDeviceSynchronize();
   const double t0 = rtc();
@@ -789,17 +789,20 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   }
 
 #if 1
-  std::vector<Particle4<real_t> > h_acc(nPtcl);
+  std::vector<Particle4<real_t> > h_acc(nPtcl), h_ptclPos(nPtcl);
   d_ptclAcc.d2h(&h_acc[0]);
+  d_ptclPos_tmp.d2h(&h_ptclPos[0]);
   double gpot = 0.0;
   double3 gacc = {0.0};
-  const real_t mass = 1.0/nPtcl;
   double gpot0 = 0.0;
   std::vector<char> cells_storage(sizeof(CellData)*nCells);
   CellData *cells = (CellData*)&cells_storage[0];
+  double mtot = 0.0;
   d_cellDataList.d2h(&cells[0], nCells);
   for (int i = 0 ; i < nPtcl; i++)
   {
+    const real_t mass = h_ptclPos[i].mass();
+    mtot += mass;
     gpot += 0.5*h_acc[i].mass() * mass;
     gacc.x += h_acc[i].x() * mass;
     gacc.y += h_acc[i].y() * mass;
@@ -833,7 +836,7 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
       }
 #endif
   }
-  printf("gpot= %g %g  acc= %g %g %g \n", gpot, gpot0, gacc.x, gacc.y, gacc.z);
+  printf("gpot= %g %g  acc= %g %g %g  mtot= %g\n", gpot, gpot0, gacc.x, gacc.y, gacc.z, mtot);
 #endif
 
   unbindTexture(computeForces::texPtcl);
