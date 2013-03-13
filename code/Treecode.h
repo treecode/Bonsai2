@@ -132,6 +132,8 @@ struct Treecode
 
   public:
     int get_nPtcl() const { return nPtcl; }
+    int get_nCrit() const { return nCrit; }
+    int get_nLeaf() const { return nLeaf; }
 
   host_mem<Particle> h_ptclPos, h_ptclVel;
   std::vector<Particle> ptcl0;
@@ -209,7 +211,7 @@ struct Treecode
   void buildTree(const int nLeaf = 16);
   void computeMultipoles();
   void makeGroups(int levelSplit = 1, const int nCrit = 64);
-  double4 computeForces(const bool INTCOUNT = false);
+  double4 computeForces(const bool INTCOUNT = true);
   void moveParticles();
   void computeEnergies();
 

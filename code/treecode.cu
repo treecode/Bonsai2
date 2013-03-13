@@ -119,14 +119,14 @@ int main(int argc, char * argv[])
   tree.ptcl_h2d();
 
   const double t0 = rtc();
-  tree.buildTree(32);          /* pass nLeaf, accepted 16, 24 & 32 */
+  tree.buildTree(32);          /* pass nLeaf, accepted 16, 24, 32, 48, 64 */
   tree.computeMultipoles();
   tree.makeGroups(5, 64);     /* pass nCrit */
 #if 1
   for (int k = 0; k < 1; k++)
   {
     const double t0 = rtc();
-    const double4 interactions = tree.computeForces(true);
+    const double4 interactions = tree.computeForces();
     const double dt = rtc() - t0;
 #ifdef QUADRUPOLE
     const int FLOPS_QUAD = 64;
@@ -148,6 +148,7 @@ int main(int argc, char * argv[])
   const double dt = rtc() - t0;
   fprintf(stderr, " steps are done in %g sec :: rate = %g MPtcl/sec\n",
       dt, tree.get_nPtcl()/1e6/dt);
+  fprintf(stderr, " nLeaf= %d  nCrit= %d\n", tree.get_nLeaf(), tree.get_nCrit());
 
 
   return 0;

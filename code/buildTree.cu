@@ -799,7 +799,7 @@ namespace treeBuild
 void Treecode<real_t>::buildTree(const int nLeaf)
 {
   this->nLeaf = nLeaf;
-  assert(nLeaf == 16 || nLeaf == 24 || nLeaf == 32);
+  assert(nLeaf == 16 || nLeaf == 24 || nLeaf == 32 || nLeaf == 48 || nLeaf == 64);
   /* compute bounding box */
 
   {
@@ -830,6 +830,10 @@ void Treecode<real_t>::buildTree(const int nLeaf)
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<24,real_t,false>, cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<32,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<32,real_t,false>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<48,real_t,true>,  cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<48,real_t,false>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<64,real_t,true>,  cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<64,real_t,false>, cudaFuncCachePreferShared));
 
   CUDA_SAFE_CALL(cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte));
 
@@ -849,6 +853,14 @@ void Treecode<real_t>::buildTree(const int nLeaf)
         break;
       case 32:
         treeBuild::buildOctree<32,real_t><<<1,1>>>(
+            nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+        break;
+      case 48:
+        treeBuild::buildOctree<48,real_t><<<1,1>>>(
+            nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+        break;
+      case 64:
+        treeBuild::buildOctree<64,real_t><<<1,1>>>(
             nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
         break;
       default:
