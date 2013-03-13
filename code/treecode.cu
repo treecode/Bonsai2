@@ -125,10 +125,14 @@ int main(int argc, char * argv[])
 #if 1
   for (int k = 0; k < 1; k++)
   {
+    const double t0 = rtc();
     const double4 interactions = tree.computeForces(true);
-    fprintf(stderr, " direct: <n>= %g  max= %g  approx: <n>=%g max= %g \n",
+    const double dt = rtc() - t0;
+    fprintf(stderr, " direct: <n>= %g  max= %g  approx: <n>=%g max= %g :: perf= %g TFLOP/s \n",
         interactions.x, interactions.y, 
-        interactions.z, interactions.w);
+        interactions.z, interactions.w,
+        (interactions.x*20 + interactions.z*64)*tree.get_nPtcl()/dt/1e12);
+
   }
 #else
   tree.computeForces();
