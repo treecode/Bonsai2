@@ -220,6 +220,16 @@ namespace makeGroups
         groupList[groupIdx] = GroupData(groupBeg, min(nCrit, ptclEnd - groupBeg));
       }
     }
+
+  struct keyCompare
+  {
+    __host__ __device__
+      bool operator()(const unsigned long long x, const unsigned long long y)
+      {
+        return x < y;
+      }
+  };
+
 };
 
   template<typename real_t>
@@ -244,7 +254,7 @@ void Treecode<real_t>::makeGroups(int levelSplit, const int nCrit)
   cudaDeviceSynchronize();
   const double t0 = rtc();
   makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos, d_keys, d_values);
- 
+
   levelSplit = std::max(1,levelSplit);  /* pick the coarse segment boundaries at the levelSplit */
   unsigned long long mask= 0;
   for (int i = 0; i < NBINS; i++)
@@ -258,15 +268,13 @@ void Treecode<real_t>::makeGroups(int levelSplit, const int nCrit)
   /* sort particles by PH key */
   thrust::device_ptr<unsigned long long> keys_beg(d_keys);
   thrust::device_ptr<unsigned long long> keys_end(d_keys + nPtcl);
-#if 1
   thrust::device_ptr<int> vals_beg(d_value.ptr);
+#if 1
   thrust::sort_by_key(keys_beg, keys_end, vals_beg); 
-  makeGroups::shuffle<Particle><<<nblock,nthread>>>(nPtcl, d_value, d_ptclPos, d_ptclPos_tmp);
 #else
-  thrust::device_ptr<Particle> ptcl(d_ptclPos_tmp.ptr);
-  d_ptclPos.d2d(d_ptclPos_tmp);
-  thrust::sort_by_key(keys_beg, keys_end, ptcl);
+  thrust::sort_by_key(keys_beg, keys_end, vals_beg, makeGroups::keyCompare());
 #endif
+  makeGroups::shuffle<Particle><<<nblock,nthread>>>(nPtcl, d_value, d_ptclPos, d_ptclPos_tmp);
 
   cuda_mem<int> d_ptclBegIdx, d_ptclEndIdx;
   cuda_mem<unsigned long long> d_keys_inv;
@@ -274,11 +282,11 @@ void Treecode<real_t>::makeGroups(int levelSplit, const int nCrit)
   d_ptclEndIdx.alloc(nPtcl);
   d_keys_inv.alloc(nPtcl);
   makeGroups::mask_keys<<<nblock,nthread,(nthread+2)*sizeof(unsigned long long)>>>(nPtcl, mask, d_keys, d_keys_inv, d_ptclBegIdx, d_ptclEndIdx);
- 
+
   thrust::device_ptr<int> valuesBeg(d_ptclBegIdx.ptr);
   thrust::device_ptr<int> valuesEnd(d_ptclEndIdx.ptr);
   thrust::inclusive_scan_by_key(keys_beg,     keys_end,    valuesBeg, valuesBeg);
-  
+
   thrust::device_ptr<unsigned long long> keys_inv_beg(d_keys_inv.ptr);
   thrust::device_ptr<unsigned long long> keys_inv_end(d_keys_inv.ptr + nPtcl);
   thrust::inclusive_scan_by_key(keys_inv_beg, keys_inv_end, valuesEnd, valuesEnd);
