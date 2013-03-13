@@ -12,7 +12,8 @@ CXXFLAGS =   $(OFLAGS)  -Wstrict-aliasing=2
 
 
 NVCC = $(CUDA_TK)/bin/nvcc   -g -O3
-NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35
+NVCCFLAGS  =  -Xptxas=-v  -arch=sm_35 
+NVCCFLAGS += -I./thrust
 NVCCLDFLAGS = -lcudadevrt -arch=sm_35 
 
 INCLUDEPATH = ./include
@@ -48,9 +49,6 @@ $(PROG): $(OBJ) $(CUOBJ)
 
 %.o:  $(CUDASRCPATH)/%.cu
 	$(NVCC) $(NVCCFLAGS) -rdc=true -c $< -o $@
-
-makeGroups.o: $(CUDASRCPATH)/makeGroups.cu
-	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
 computeForces.o: $(CUDASRCPATH)/computeForces.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@ -ftz=true -rdc=true

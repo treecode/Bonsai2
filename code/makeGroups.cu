@@ -1,5 +1,6 @@
 #include "Treecode.h"
 
+#include <thrust/device_ptr.h>
 #include <thrust/sort.h>
 #include <thrust/scan.h>
 
@@ -274,6 +275,8 @@ void Treecode<real_t>::makeGroups(int levelSplit, const int nCrit)
 #else
   thrust::sort_by_key(keys_beg, keys_end, vals_beg, makeGroups::keyCompare());
 #endif
+
+#if 1
   makeGroups::shuffle<Particle><<<nblock,nthread>>>(nPtcl, d_value, d_ptclPos, d_ptclPos_tmp);
 
   cuda_mem<int> d_ptclBegIdx, d_ptclEndIdx;
@@ -304,12 +307,16 @@ void Treecode<real_t>::makeGroups(int levelSplit, const int nCrit)
 #endif
 
   makeGroups::make_groups<<<nblock,nthread>>>(nPtcl, nCrit, d_ptclBegIdx, d_ptclEndIdx, d_groupList);
+#endif
 
   kernelSuccess("makeGroups");
   const double t1 = rtc();
   const double dt = t1 - t0;
   fprintf(stderr, " makeGroups done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
   CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nGroups, makeGroups::groupCounter, sizeof(int)));
+#if 0
+  assert(0);
+#endif
 
 
   fprintf(stderr, "nGroup= %d <nCrit>= %g \n", nGroups, nPtcl*1.0/nGroups);
