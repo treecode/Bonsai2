@@ -121,7 +121,7 @@ int main(int argc, char * argv[])
   const double t0 = rtc();
   tree.buildTree();
   tree.computeMultipoles();
-  tree.makeGroups();
+  tree.makeGroups(6);
 #if 1
   for (int k = 0; k < 1; k++)
   {

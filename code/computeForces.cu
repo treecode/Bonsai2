@@ -555,7 +555,7 @@ namespace computeForces
 
   __device__ unsigned int retired_groupCount = 0;
 
-  template<int NTHREAD2, bool INTCOUNT>
+  template<int NTHREAD2, bool INTCOUNT, int NI>
     __launch_bounds__(1<<NTHREAD2, 1024/(1<<NTHREAD2))
     static __global__ 
     void treewalk(
@@ -601,7 +601,6 @@ namespace computeForces
         const int pbeg = group.pbeg();
         const int np   = group.np();
 
-        const int NI = 2;
         real3_t iPos[NI];
 
 #pragma unroll
@@ -753,10 +752,16 @@ double2 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   cudaDeviceSynchronize();
   const double t0 = rtc();
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(computeForces::retired_groupCount, &value, sizeof(int)));
-  computeForces::treewalk<NTHREAD2,true><<<nblock,NTHREAD>>>(
-      nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
-      d_ptclPos_tmp, d_ptclAcc,
-      d_interactions, d_gmem_pool);
+  if (nCrit <= WARP_SIZE)
+    computeForces::treewalk<NTHREAD2,true,1><<<nblock,NTHREAD>>>(
+        nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
+        d_ptclPos_tmp, d_ptclAcc,
+        d_interactions, d_gmem_pool);
+  else
+    computeForces::treewalk<NTHREAD2,true,2><<<nblock,NTHREAD>>>(
+        nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
+        d_ptclPos_tmp, d_ptclAcc,
+        d_interactions, d_gmem_pool);
   kernelSuccess("treewalk");
   const double t1 = rtc();
   const double dt = t1 - t0;

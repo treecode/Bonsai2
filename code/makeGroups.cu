@@ -223,7 +223,7 @@ namespace makeGroups
 };
 
   template<typename real_t, int NLEAF>
-void Treecode<real_t, NLEAF>::makeGroups()
+void Treecode<real_t, NLEAF>::makeGroups(int levelSplit)
 {
   const int nthread = 256;
 
@@ -244,7 +244,7 @@ void Treecode<real_t, NLEAF>::makeGroups()
   const double t0 = rtc();
   makeGroups::computeKeys<NBINS,real_t><<<nblock,nthread>>>(nPtcl, d_domain, d_ptclPos, d_keys, d_values);
  
-  const int levelSplit = 6;  /* pick the coarse segment boundaries at the levelSplit */
+  levelSplit = std::max(1,levelSplit);  /* pick the coarse segment boundaries at the levelSplit */
   unsigned long long mask= 0;
   for (int i = 0; i < NBINS; i++)
   {
@@ -294,10 +294,7 @@ void Treecode<real_t, NLEAF>::makeGroups()
   }
 #endif
 
-#if 1
-  const int nCrit = 64;
   makeGroups::make_groups<<<nblock,nthread>>>(nPtcl, nCrit, d_ptclBegIdx, d_ptclEndIdx, d_groupList);
-#endif
 
   kernelSuccess("makeGroups");
   const double t1 = rtc();

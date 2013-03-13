@@ -124,7 +124,7 @@ struct Treecode
 
 
   real_t theta, eps2;
-  int nPtcl, nLevels, nCells, nLeaves, nNodes, nGroups;
+  int nPtcl, nLevels, nCells, nLeaves, nNodes, nGroups, nCrit;
 
   host_mem<Particle> h_ptclPos, h_ptclVel;
   std::vector<Particle> ptcl0;
@@ -145,10 +145,11 @@ struct Treecode
   cuda_mem<real4_t> d_cellQuad0;
   cuda_mem<real2_t> d_cellQuad1;
 
-  Treecode(const real_t _eps = 0.01, const real_t _theta = 0.75)
+  Treecode(const real_t _eps = 0.01, const real_t _theta = 0.75, const int _ncrit = 2*WARP_SIZE)
   {
     eps2  = _eps*_eps;
     theta = _theta;
+    nCrit = _ncrit;
     d_domain.alloc(1);
     d_minmax.alloc(2048);
     d_level_begIdx.alloc(32);  /* max 32 levels */
@@ -198,7 +199,7 @@ struct Treecode
 
   void buildTree();
   void computeMultipoles();
-  void makeGroups();
+  void makeGroups(int levelSplit = 1);
   double2 computeForces(const bool INTCOUNT = false);
   void moveParticles();
   void computeEnergies();
