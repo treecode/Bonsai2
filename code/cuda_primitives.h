@@ -179,8 +179,9 @@ static __device__ __forceinline__ int2 inclusive_segscan_warp(
 
   const int laneIdx = threadIdx.x & (WARP_SIZE - 1);
   const int distance = __clz(flags & lanemask_le()) + laneIdx - 31;
-  const int val = inclusive_segscan_warp_step<WARP_SIZE2>(value, min(distance, laneIdx));
-  return make_int2(val + (carryValue & (-(laneIdx < dist_block))), __shfl(val, WARP_SIZE-1, WARP_SIZE));
+  const int val = inclusive_segscan_warp_step<WARP_SIZE2>(value, min(distance, laneIdx)) +
+    (carryValue & (-(laneIdx < dist_block)));
+  return make_int2(val, __shfl(val, WARP_SIZE-1, WARP_SIZE));
 }
 
 

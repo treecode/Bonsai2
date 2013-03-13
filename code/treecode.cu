@@ -119,7 +119,7 @@ int main(int argc, char * argv[])
   tree.ptcl_h2d();
 
   const double t0 = rtc();
-  tree.buildTree(32);          /* pass nLeaf, accepted 16, 24, 32, 48, 64 */
+  tree.buildTree(64);          /* pass nLeaf, accepted 16, 24, 32, 48, 64 */
   tree.computeMultipoles();
   tree.makeGroups(5, 64);     /* pass nCrit */
 #if 1
