@@ -648,8 +648,8 @@ double4 Treecode<real_t>::computeForces(const bool INTCOUNT)
 
   if (INTCOUNT)
   {
-    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,true,1>, cudaFuncCachePreferShared));
-    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,true,2>, cudaFuncCachePreferShared));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,true,1>, cudaFuncCachePreferL1));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,true,2>, cudaFuncCachePreferL1));
     if (nCrit <= WARP_SIZE)
       computeForces::treewalk<NTHREAD2,true,1><<<nblock,NTHREAD>>>(
           nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
@@ -665,8 +665,8 @@ double4 Treecode<real_t>::computeForces(const bool INTCOUNT)
   }
   else
   {
-    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,false,1>, cudaFuncCachePreferShared));
-    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,false,2>, cudaFuncCachePreferShared));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,false,1>, cudaFuncCachePreferL1));
+    CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&computeForces::treewalk<NTHREAD2,false,2>, cudaFuncCachePreferL1));
     if (nCrit <= WARP_SIZE)
       computeForces::treewalk<NTHREAD2,false,1><<<nblock,NTHREAD>>>(
           nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
