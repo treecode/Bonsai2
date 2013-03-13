@@ -633,8 +633,15 @@ namespace computeForces
 
         real4_t iAcc[NI] = {vec<4,real_t>::null()};
 
-        const uint2 counters = treewalk_warp<SHIFT,NTHREAD2,NI,INTCOUNT>
-          (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
+        uint2 counters;
+#if 0
+        if (np <= WARP_SIZE) 
+          counters =  treewalk_warp<SHIFT,NTHREAD2,1,INTCOUNT>
+            (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
+        else
+#endif
+          counters =  treewalk_warp<SHIFT,NTHREAD2,2,INTCOUNT>
+            (iAcc, iPos, cvec, hvec, eps2, top_cells, shmem, gmem);
 
         assert(!(counters.x == 0xFFFFFFFF && counters.y == 0xFFFFFFFF));
 
