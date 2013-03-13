@@ -727,65 +727,12 @@ void unbindTexture(Tex &tex)
   template<typename real_t, int NLEAF>
 double4 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
 {
-  assert(INTCOUNT);
-
   bindTexture(computeForces::texCellData,     (uint4* )d_cellDataList.ptr, nCells);
   bindTexture(computeForces::texCellSize,     d_cellSize.ptr,     nCells);
   bindTexture(computeForces::texCellMonopole, d_cellMonopole.ptr, nCells);
   bindTexture(computeForces::texCellQuad0,    d_cellQuad0.ptr,    nCells);
   bindTexture(computeForces::texCellQuad1,    d_cellQuad1.ptr,    nCells);
   bindTexture(computeForces::texPtcl,         d_ptclPos.ptr,      nPtcl);
-
-  cuda_mem<int2> d_interactions;
-  if (INTCOUNT)
-    d_interactions.alloc(nPtcl);
-
-#if 0
-  {
-    std::vector<Particle4<real_t> > h_ptcl(nPtcl);
-    std::vector<GroupData> h_group(nGroups, make_int2(0,0));
-    d_ptclPos.d2h(&h_ptcl[0]);
-    d_groupList.d2h(&h_group[0], nGroups);
-#if 1
-    for (int i = 0; i < nGroups; i++)
-    {
-      const GroupData group = h_group[i];
-      const int pbeg = group.pbeg();
-      const int np   = group.np();
-      float3 rmin = {h_ptcl[pbeg].x(), h_ptcl[pbeg].y(), h_ptcl[pbeg].z()};
-      float3 rmax = rmin;
-      for (int j = pbeg; j < pbeg+np; j++)
-      {
-        const Particle4<real_t> ptcl = h_ptcl[j];
-        rmin.x = std::min(rmin.x, ptcl.x());
-        rmin.y = std::min(rmin.y, ptcl.y());
-        rmin.z = std::min(rmin.z, ptcl.z());
-        rmax.x = std::max(rmax.x, ptcl.x());
-        rmax.y = std::max(rmax.y, ptcl.y());
-        rmax.z = std::max(rmax.z, ptcl.z());
-      }
-      const float3 hsize = {0.5*(rmax.x - rmin.x), 0.5*(rmax.y-rmin.y), 0.5*(rmax.z-rmin.z)};
-      const float hmin = std::min(hsize.x, std::min(hsize.y,hsize.z));
-      const float hmax = std::max(hsize.x, std::max(hsize.y,hsize.z));
-      printf("group= %d  pbeg;pend= %d;%d  hmin= %g  hmax= %g \n", // -- rmin= %g %g %g  rmax= %g %g %g\n",
-          i, pbeg, pbeg+np, hmin, hmax
-#if 0
-          ,rmin.x, rmin.y, rmin.z,
-          rmax.x, rmax.y, rmax.z
-#endif
-          );
-    }
-#else
-    for (int i= 0; i < nPtcl; i++)
-    {
-      const Particle ptcl = h_ptcl[i];
-      printf("idx= %d : x,y,z= %g %g %g \n",
-          i,ptcl.x(), ptcl.y(), ptcl.z());
-    }
-    assert(0);
-#endif
-  }
-#endif
 
   const int NTHREAD2 = 7;
   const int NTHREAD  = 1<<NTHREAD2;
@@ -796,8 +743,9 @@ double4 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
   d_gmem_pool.alloc(CELL_LIST_MEM_PER_WARP*nblock*(NTHREAD/WARP_SIZE));
   printf("---2--\n");
 
+#if 0
   CUDA_SAFE_CALL(cudaMemset(d_ptclAcc, 0, sizeof(Particle)*nPtcl));
-  CUDA_SAFE_CALL(cudaMemset(d_interactions, 0, sizeof(uint2)*nPtcl));
+#endif
   const int starting_level = 1;
   int value = 0;
   cudaDeviceSynchronize();
@@ -868,91 +816,6 @@ double4 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
     interactions.w = approx_max;
     fprintf(stderr, " grav potential= %g \n", grav_potential);
   }
-
-
-#if 0
-  double2 direct_minmax = make_double2(1e10,-1);
-  double2 approx_minmax = make_double2(1e10,-1);
-  if (INTCOUNT)
-  {
-    std::vector<int2> h_interactions(nPtcl);
-    std::vector<int>  h_approx(nPtcl), h_direct(nPtcl);
-    d_interactions.d2h(&h_interactions[0]);
-    for (int i = 0; i < nPtcl; i++)
-    {
-      interactions.x += (double)h_interactions[i].x;
-      interactions.y += (double)h_interactions[i].y;
-      h_approx[i] = h_interactions[i].x;
-      h_direct[i] = h_interactions[i].y;
-      direct_minmax.x = std::min(direct_minmax.x, (double)h_interactions[i].y);
-      direct_minmax.y = std::max(direct_minmax.y, (double)h_interactions[i].y);
-      approx_minmax.x = std::min(approx_minmax.x, (double)h_interactions[i].x);
-      approx_minmax.y = std::max(approx_minmax.y, (double)h_interactions[i].x);
-    }
-    std::sort(h_approx.begin(), h_approx.end());
-    std::sort(h_direct.begin(), h_direct.end());
-    for (int i = 0; i < 100; i += 10)
-    {
-      printf("i= %d:  direct= %d %d   approx= %d %d \n",
-          i, 
-          h_direct[i], h_direct[nPtcl-i-1],
-          h_approx[i], h_approx[nPtcl-i-1]);
-    }
-    printf("direct: min= %g  max= %g \n", direct_minmax.x, direct_minmax.y);
-    printf("approx: min= %g  max= %g \n", approx_minmax.x, approx_minmax.y);
-  }
-#endif
-
-#if 0
-  std::vector<Particle4<real_t> > h_acc(nPtcl), h_ptclPos(nPtcl);
-  d_ptclAcc.d2h(&h_acc[0]);
-  d_ptclPos_tmp.d2h(&h_ptclPos[0]);
-  double gpot = 0.0;
-  double3 gacc = {0.0};
-  double gpot0 = 0.0;
-  std::vector<char> cells_storage(sizeof(CellData)*nCells);
-  CellData *cells = (CellData*)&cells_storage[0];
-  double mtot = 0.0;
-  d_cellDataList.d2h(&cells[0], nCells);
-  for (int i = 0 ; i < nPtcl; i++)
-  {
-    const real_t mass = h_ptclPos[i].mass();
-    mtot += mass;
-    gpot += 0.5*h_acc[i].mass() * mass;
-    gacc.x += h_acc[i].x() * mass;
-    gacc.y += h_acc[i].y() * mass;
-    gacc.z += h_acc[i].z() * mass;
-#if 0
-    if (i % 1000 == 0) printf("i= %d\n", i);
-    for (int j  = i+1; j < nPtcl ;j++)
-    {
-      const double dx = h_ptclPos[j].x() - h_ptclPos[i].x();
-      const double dy = h_ptclPos[j].y() - h_ptclPos[i].y();
-      const double dz = h_ptclPos[j].z() - h_ptclPos[i].z();
-      const double r2 = dx*dx + dy*dy + dz*dz + eps2;
-      gpot0 += h_ptclPos[i].mass() * h_ptclPos[j].mass() / sqrt(r2);
-    }
-#endif
-#if 0
-    if (i % 1000 == 0) printf("i= %d\n", i);
-    for (int jc = 0; jc < nCells; jc++)
-      if (cells[jc].isLeaf())
-      {
-        const int pbeg = cells[jc].pbeg();
-        const int pend = cells[jc].pend();
-        for (int j  = pbeg; j < pend ;j++)
-        {
-          const double dx = h_ptclPos[j].x() - h_ptclPos[i].x();
-          const double dy = h_ptclPos[j].y() - h_ptclPos[i].y();
-          const double dz = h_ptclPos[j].z() - h_ptclPos[i].z();
-          const double r2 = dx*dx + dy*dy + dz*dz + eps2;
-          gpot0 += 0.5*h_ptclPos[i].mass() * h_ptclPos[j].mass() / sqrt(r2);
-        }
-      }
-#endif
-  }
-  printf("gpot= %g %g  acc= %g %g %g  mtot= %g\n", gpot, gpot0, gacc.x, gacc.y, gacc.z, mtot);
-#endif
 
   unbindTexture(computeForces::texPtcl);
   unbindTexture(computeForces::texCellQuad1);
