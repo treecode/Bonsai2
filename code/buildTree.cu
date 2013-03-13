@@ -873,7 +873,6 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 
   /* sort nodes by level */
-#if 1
   {
     cudaDeviceSynchronize();
     const double t0 = rtc();
@@ -897,7 +896,6 @@ void Treecode<real_t, NLEAF>::buildTree()
     const double dt = t1 - t0;
     fprintf(stderr, " shuffle done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
   }
-#endif
 
 #if 0  /* tree consistency */
   {
@@ -946,13 +944,6 @@ void Treecode<real_t, NLEAF>::buildTree()
     for (int i = 0; i < 8; i++)
       currLevel.push_back(i);
 
-    cnt++;
-    for (int lev = 0; lev < 6; lev++)
-    {
-      for (int i = 0; i < (int)currLevel.size(); i++)
-      {
-      }
-    }
 
 
     for (int i= 1; i < 32; i++)
@@ -980,10 +971,11 @@ void Treecode<real_t, NLEAF>::buildTree()
   }
 #endif
 
-#if 0
+#if 1
   { /* print tree structure */
     fprintf(stderr, " ncells= %d nLevels= %d  nNodes= %d nLeaves= %d (%d) \n", nCells, nLevels, nNodes, nLeaves, nNodes+nLeaves);
 
+#if 0
     std::vector<char> cells_storage(sizeof(CellData)*nCells);
     CellData *cells = (CellData*)&cells_storage[0];
     d_cellDataList.d2h(&cells[0], nCells);
@@ -1011,25 +1003,26 @@ void Treecode<real_t, NLEAF>::buildTree()
       addr += cellL[i];
       if (cellL[i+1] == 0) break;
     }
+#endif
 
     int2 levels[32];
     d_level_begIdx.d2h(levels);
-    for (int i= 0; i < nlev; i++)
+    for (int i= 0; i < nLevels; i++)
     {
       const int2 lv = levels[i];
       printf("level= %d  ncells= %d   %d %d \n", i, lv.y-lv.x+1, lv.x, lv.y+1);
     }
 
-#if 1
+#if 0
     for (int i = 0; i < nCells; i++)
     {
       printf("cellIdx= %d  isNode= %s: lev= %d first= %d  n= %d  pbeg= %d  pend =%d\n",
           i, cells[i].isNode() ? "true ":"false", cells[i].level(),
           cells[i].first(), cells[i].n(), cells[i].pbeg(), cells[i].pend());
     }
-#endif
     fflush(stdout);
     assert(0);
+#endif
 
   }
 #endif

@@ -40,7 +40,9 @@ int main(int argc, char * argv[])
   typedef float real_t;
   typedef Treecode<real_t, _NLEAF> Tree;
 
-  Tree tree;
+  const real_t eps   = 0.05;
+  const real_t theta = 0.75;
+  Tree tree(eps, theta);
 
   if (nPtcl > 0)
   {
@@ -58,7 +60,7 @@ int main(int argc, char * argv[])
       ptclVel.y()    = data.vel[i].y;
       ptclVel.z()    = data.vel[i].z;
 
-      ptclVel.mass() = i; //data.mass[i];
+      ptclVel.mass() = data.mass[i];
       ptclVel.mass() = data.mass[i];
       ptclPos.mass() = data.mass[i];
 
