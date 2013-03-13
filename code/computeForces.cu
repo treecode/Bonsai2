@@ -578,8 +578,8 @@ namespace computeForces
     }
 }
 
-  template<typename real_t, int NLEAF>
-double4 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
+  template<typename real_t>
+double4 Treecode<real_t>::computeForces(const bool INTCOUNT)
 {
   bindTexture(computeForces::texCellData,     (uint4* )d_cellDataList.ptr, nCells);
   bindTexture(computeForces::texCellSize,     d_cellSize.ptr,     nCells);
@@ -626,11 +626,13 @@ double4 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
           nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
           d_ptclPos_tmp, d_ptclAcc,
           d_gmem_pool);
-    else
+    else if (nCrit <= 2*WARP_SIZE)
       computeForces::treewalk<NTHREAD2,true,2><<<nblock,NTHREAD>>>(
           nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
           d_ptclPos_tmp, d_ptclAcc,
           d_gmem_pool);
+    else
+      assert(0);
   }
   else
   {
@@ -641,11 +643,13 @@ double4 Treecode<real_t, NLEAF>::computeForces(const bool INTCOUNT)
           nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
           d_ptclPos_tmp, d_ptclAcc,
           d_gmem_pool);
-    else
+    else if (nCrit <= 2*WARP_SIZE)
       computeForces::treewalk<NTHREAD2,false,2><<<nblock,NTHREAD>>>(
           nGroups, d_groupList, eps2, starting_level, d_level_begIdx,
           d_ptclPos_tmp, d_ptclAcc,
           d_gmem_pool);
+    else
+      assert(0);
   }
   kernelSuccess("treewalk");
   const double t1 = rtc();

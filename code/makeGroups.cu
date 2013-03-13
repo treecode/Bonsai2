@@ -222,9 +222,10 @@ namespace makeGroups
     }
 };
 
-  template<typename real_t, int NLEAF>
-void Treecode<real_t, NLEAF>::makeGroups(int levelSplit)
+  template<typename real_t>
+void Treecode<real_t>::makeGroups(int levelSplit, const int nCrit)
 {
+  this->nCrit = nCrit;
   const int nthread = 256;
 
   d_key.realloc(2.0*nPtcl);
@@ -303,7 +304,7 @@ void Treecode<real_t, NLEAF>::makeGroups(int levelSplit)
   CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nGroups, makeGroups::groupCounter, sizeof(int)));
 
 
-  fprintf(stderr, "nGroup= %d\n", nGroups);
+  fprintf(stderr, "nGroup= %d <nCrit>= %g \n", nGroups, nPtcl*1.0/nGroups);
 #if 0
   {
     std::vector<int2> groups(nGroups);

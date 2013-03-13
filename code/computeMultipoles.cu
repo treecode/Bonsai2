@@ -191,8 +191,8 @@ namespace multipoles
 
 };
 
-  template<typename real_t, int NLEAF>
-void Treecode<real_t, NLEAF>::computeMultipoles()
+  template<typename real_t>
+void Treecode<real_t>::computeMultipoles()
 {
   d_cellSize    .realloc(nCells);
   d_cellMonopole.realloc(nCells);

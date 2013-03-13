@@ -1,3 +1,3 @@
 #pragma once
 
-template struct Treecode<float, _NLEAF>;
+template struct Treecode<float>;

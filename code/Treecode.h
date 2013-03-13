@@ -9,7 +9,6 @@
 #include <string>
 #include <sstream>
 
-#define _NLEAF 16
 #define __out
 
 static void kernelSuccess(const char kernel[] = "kernel")
@@ -113,7 +112,7 @@ struct Quadrupole
 };
 
 
-template<typename real_t, int NLEAF>
+template<typename real_t>
 struct Treecode
 {
   typedef Particle4<real_t> Particle;
@@ -124,7 +123,11 @@ struct Treecode
 
 
   real_t theta, eps2;
-  int nPtcl, nLevels, nCells, nLeaves, nNodes, nGroups, nCrit;
+  private:
+  int nPtcl, nLevels, nCells, nLeaves, nNodes, nGroups, nCrit, nLeaf;
+
+  public:
+    int get_nPtcl() const { return nPtcl; }
 
   host_mem<Particle> h_ptclPos, h_ptclVel;
   std::vector<Particle> ptcl0;
@@ -199,9 +202,9 @@ struct Treecode
       ptcl0[i] = h_ptclPos[i];
   }
 
-  void buildTree();
+  void buildTree(const int nLeaf = 16);
   void computeMultipoles();
-  void makeGroups(int levelSplit = 1);
+  void makeGroups(int levelSplit = 1, const int nCrit = 64);
   double4 computeForces(const bool INTCOUNT = false);
   void moveParticles();
   void computeEnergies();

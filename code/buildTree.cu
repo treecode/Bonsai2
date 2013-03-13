@@ -795,9 +795,11 @@ namespace treeBuild
 }
 
 
-  template<typename real_t, int NLEAF>
-void Treecode<real_t, NLEAF>::buildTree()
+  template<typename real_t>
+void Treecode<real_t>::buildTree(const int nLeaf)
 {
+  this->nLeaf = nLeaf;
+  assert(nLeaf == 16 || nLeaf == 24 || nLeaf == 32);
   /* compute bounding box */
 
   {
@@ -822,11 +824,12 @@ void Treecode<real_t, NLEAF>::buildTree()
 
   cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
 
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant      <NLEAF,real_t,true>,  cudaFuncCachePreferShared));
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant      <NLEAF,real_t,false>, cudaFuncCachePreferShared));
-#if 0
-  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctantSingle<NLEAF,T>,       cudaFuncCachePreferShared));
-#endif
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<16,real_t,true>,  cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<16,real_t,false>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<24,real_t,true>,  cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<24,real_t,false>, cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<32,real_t,true>,  cudaFuncCachePreferShared));
+  CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<32,real_t,false>, cudaFuncCachePreferShared));
 
   CUDA_SAFE_CALL(cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte));
 
@@ -834,8 +837,23 @@ void Treecode<real_t, NLEAF>::buildTree()
     CUDA_SAFE_CALL(cudaMemset(d_stack_memory_pool,0,stack_size*sizeof(int)));
     cudaDeviceSynchronize();
     const double t0 = rtc();
-    treeBuild::buildOctree<NLEAF,real_t><<<1,1>>>(
-        nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+    switch(nLeaf)
+    {
+      case 16:
+        treeBuild::buildOctree<16,real_t><<<1,1>>>(
+            nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+        break;
+      case 24:
+        treeBuild::buildOctree<24,real_t><<<1,1>>>(
+            nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+        break;
+      case 32:
+        treeBuild::buildOctree<32,real_t><<<1,1>>>(
+            nPtcl, d_domain, d_cellDataList, d_stack_memory_pool, d_ptclPos, d_ptclPos_tmp, d_ptclVel);
+        break;
+      default:
+        assert(0);
+    }
     kernelSuccess("buildOctree");
     const double t1 = rtc();
     const double dt = t1 - t0;
@@ -887,7 +905,7 @@ void Treecode<real_t, NLEAF>::buildTree()
       int jk = 0;
       for (int j = lv.x; j <= lv.y; j++)
         keys[jk++] = ((unsigned long long)cells[j].pbeg() << 32) | cells[j].pend();
-//      thrust::sort(&keys[0], &keys[jk]);
+      //      thrust::sort(&keys[0], &keys[jk]);
       int np = 0;
       for (int j = 0; j < jk ;j++)
       {
@@ -928,7 +946,7 @@ void Treecode<real_t, NLEAF>::buildTree()
       int jk = 0;
       for (int j = lv.x; j <= lv.y; j++)
         keys[jk++] = ((unsigned long long)cells[j].pbeg() << 32) | cells[j].pend();
-//      thrust::sort(&keys[0], &keys[jk]);
+      //      thrust::sort(&keys[0], &keys[jk]);
       int np = 0;
       for (int j = 0; j < jk ;j++)
       {

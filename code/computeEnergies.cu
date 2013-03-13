@@ -1,7 +1,7 @@
 #include "Treecode.h"
 
-template<typename real_t, int NLEAF>
-void Treecode<real_t, NLEAF>::computeEnergies()
+template<typename real_t>
+void Treecode<real_t>::computeEnergies()
 {
   printf("Computing energies\n");
 }

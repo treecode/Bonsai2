@@ -38,7 +38,7 @@ int main(int argc, char * argv[])
   }
 
   typedef float real_t;
-  typedef Treecode<real_t, _NLEAF> Tree;
+  typedef Treecode<real_t> Tree;
 
   const real_t eps   = 0.05;
   const real_t theta = 0.75;
@@ -119,9 +119,9 @@ int main(int argc, char * argv[])
   tree.ptcl_h2d();
 
   const double t0 = rtc();
-  tree.buildTree();
+  tree.buildTree(32);          /* pass nLeaf, accepted 16, 24 & 32 */
   tree.computeMultipoles();
-  tree.makeGroups(6);
+  tree.makeGroups(5, 64);     /* pass nCrit */
 #if 1
   for (int k = 0; k < 1; k++)
   {
@@ -137,7 +137,7 @@ int main(int argc, char * argv[])
   tree.computeEnergies();
   const double dt = rtc() - t0;
   fprintf(stderr, " steps are done in %g sec :: rate = %g MPtcl/sec\n",
-      dt, tree.nPtcl/1e6/dt);
+      dt, tree.get_nPtcl()/1e6/dt);
 
 
   return 0;
