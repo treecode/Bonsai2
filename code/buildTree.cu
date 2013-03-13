@@ -826,12 +826,16 @@ void Treecode<real_t>::buildTree(const int nLeaf)
 
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<16,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<16,real_t,false>, cudaFuncCachePreferShared));
+
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<24,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<24,real_t,false>, cudaFuncCachePreferShared));
+
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<32,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<32,real_t,false>, cudaFuncCachePreferShared));
+
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<48,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<48,real_t,false>, cudaFuncCachePreferShared));
+
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<64,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<64,real_t,false>, cudaFuncCachePreferShared));
 
