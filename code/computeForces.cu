@@ -141,7 +141,7 @@ namespace computeForces
       const float4 M0 = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 #endif
 
-#pragma unroll
+//#pragma unroll
       for (int j = 0; j < WARP_SIZE; j++)
       {
         const float4 jM0 = make_float4(__shfl(M0.x, j), __shfl(M0.y, j), __shfl(M0.z, j), __shfl(M0.w,j));
