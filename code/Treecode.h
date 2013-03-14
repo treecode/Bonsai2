@@ -82,6 +82,10 @@ struct CellData
       const int _n = n()-1;
       packed_data.y = first | ((unsigned int)_n << NLEAF_SHIFT);
     }
+    __host__ __device__ void update_parent(const int parent)
+    {
+      packed_data.x = parent | (level() << LEVEL_SHIFT);
+    }
 };
 
 template<typename real_t>
@@ -146,8 +150,9 @@ struct Treecode
   cuda_mem<int>  d_stack_memory_pool;
   cuda_mem<CellData> d_cellDataList, d_cellDataList_tmp;
   cuda_mem<GroupData> d_groupList;
+  cuda_mem<int>  d_leafList;
 
-  cuda_mem<int>      d_key, d_value;
+  cuda_mem<int>  d_key, d_value;
 
 
   cuda_mem<real4_t> d_cellSize,  d_cellMonopole;

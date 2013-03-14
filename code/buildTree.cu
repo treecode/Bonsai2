@@ -742,22 +742,6 @@ namespace treeBuild
       moved_to_idx[oldIdx] = newIdx;
     }
 
-  static __global__ void
-    shuffle_cells(const int n, const int value[], const int moved_to_idx[], const CellData cellListIn[], CellData cellListOut[])
-    {
-      const int idx = blockIdx.x*blockDim.x + threadIdx.x;
-      if (idx >= n) return;
-
-      const int mapIdx = value[idx];
-      CellData cell = cellListIn[mapIdx];
-      if (cell.isNode())
-      {
-        const int firstOld = cell.first();
-        const int firstNew = moved_to_idx[firstOld];
-        cell.update_first(firstNew);
-      }
-      cellListOut[idx] = cell;
-    }
 
   static __global__ void
     compute_level_begIdx(const int n, const int levels[], int2 level_begendIdx[])
@@ -791,6 +775,67 @@ namespace treeBuild
       const int nextLevel = shLevels[idx+1];
       if (currLevel != nextLevel || gidx == n-1)
         level_begendIdx[currLevel].y = gidx;
+    }
+  
+  __device__  unsigned int leafIdx_counter = 0;
+  static __global__ void
+    shuffle_cells(const int n, const int value[], const int moved_to_idx[], const CellData cellListIn[], CellData cellListOut[])
+    {
+      const int idx = blockIdx.x*blockDim.x + threadIdx.x;
+      if (idx >= n) return;
+
+      const int mapIdx = value[idx];
+      CellData cell = cellListIn[mapIdx];
+      if (cell.isNode())
+      {
+        const int firstOld = cell.first();
+        const int firstNew = moved_to_idx[firstOld];
+        cell.update_first(firstNew);
+      }
+      if (cell.parent() > 0)
+        cell.update_parent(moved_to_idx[cell.parent()]);
+
+      cellListOut[idx] = cell;
+
+      if (threadIdx.x == 0 && blockIdx.x == 0)
+        leafIdx_counter = 0;
+    }
+
+  template<int NTHREAD2>
+  static __global__ 
+    void collect_leaves(const int n, const CellData *cellList, int *leafList)
+    {
+      const int gidx = blockDim.x*blockIdx.x + threadIdx.x;
+
+      const CellData cell = cellList[min(gidx,n-1)];
+
+      __shared__ int shdata[1<<NTHREAD2];
+
+      int value = gidx < n && cell.isLeaf();
+      shdata[threadIdx.x] = value;
+#pragma unroll
+      for (int offset2 = 0; offset2 < NTHREAD2; offset2++)
+      {
+        const int offset = 1 << offset2;
+        __syncthreads(); 
+        if (threadIdx.x >= offset)
+          value += shdata[threadIdx.x - offset];
+        __syncthreads();
+        shdata[threadIdx.x] = value;
+      }
+
+      const int nwrite  = shdata[threadIdx.x];
+      const int scatter = nwrite - (gidx < n && cell.isLeaf());
+
+      __syncthreads();
+
+      if (threadIdx.x == blockDim.x-1 && nwrite > 0)
+        shdata[0] = atomicAdd(&leafIdx_counter, nwrite);
+
+      __syncthreads();
+
+      if (cell.isLeaf())
+        leafList[shdata[0] + scatter] = gidx;
     }
 }
 
@@ -900,11 +945,33 @@ void Treecode<real_t>::buildTree(const int nLeaf)
 
     treeBuild::write_newIdx <<<nblock,nthread>>>(nCells, d_value, d_key);
     treeBuild::shuffle_cells<<<nblock,nthread>>>(nCells, d_value, d_key, d_cellDataList_tmp, d_cellDataList);
+
+    /* group leaves */
+
+    d_leafList.realloc(nLeaves);
+    const int NTHREAD2 = 8;
+    const int NTHREAD  = 256;
+    const int nblock1 = (nCells-1)/NTHREAD+1;
+    treeBuild::collect_leaves<NTHREAD2><<<nblock1,NTHREAD>>>(nCells, d_cellDataList, d_leafList);
+
     kernelSuccess("shuffle");
     const double t1 = rtc();
     const double dt = t1 - t0;
     fprintf(stderr, " shuffle done in %g sec : %g Mptcl/sec\n",  dt, nPtcl/1e6/dt);
+#if 0
+    int nnn;
+    CUDA_SAFE_CALL(cudaMemcpyFromSymbol(&nnn, treeBuild::leafIdx_counter, sizeof(int)));
+    printf("nnn= %d  nLeaves= %d\n", nnn , nLeaves);
+    assert(nnn == nLeaves);
+    std::vector<int> leaf(nLeaves);
+    d_leafList.d2h(&leaf[0]);
+    for (int i = 0; i < nLeaves; i++)
+      printf("leaf= %d :  %d \n",i, leaf[i]);
+
+#endif
   }
+
+
 
 #if 0  /* tree consistency */
   {
