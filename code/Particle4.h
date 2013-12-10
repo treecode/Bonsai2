@@ -65,7 +65,7 @@ struct Particle4
     vec4 packed_data;
   public:
 
-  __device__ Particle4() {}
+  __host__ __device__ Particle4() {}
   __device__ Particle4(const vec4 data) : packed_data(data) {}
   __host__ __device__ T x   ()  const { return packed_data.x;}
   __host__ __device__ T y   ()  const { return packed_data.y;}
