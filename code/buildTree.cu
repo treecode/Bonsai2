@@ -110,7 +110,7 @@ namespace treeBuild
         minmax_ptr[blockIdx.x + NBLOCK] = bmax;
       }
 
-      __shared__ bool lastBlock;
+      __shared__ int lastBlock; /* with bool, doesn't compile in CUDA 6.0 */
       __threadfence();
       __syncthreads();
 
@@ -122,6 +122,7 @@ namespace treeBuild
 
       __syncthreads();
 
+#if 1
       if (lastBlock)
       {
 
@@ -161,6 +162,7 @@ namespace treeBuild
           retirementCount = 0;
         }
       }
+#endif
     }
 
   /*******************/
@@ -854,6 +856,7 @@ void Treecode<real_t>::buildTree(const int nLeaf)
 
     assert(2*NBLOCK <= 2048);  /* see Treecode constructor for d_minmax allocation */
     cudaDeviceSynchronize();
+    kernelSuccess("cudaDomainSize0");
     const double t0 = rtc();
     treeBuild::computeBoundingBox<NTHREAD2,real_t><<<NBLOCK,NTHREAD,NTHREAD*sizeof(float2)>>>
       (nPtcl, d_minmax, d_domain, d_ptclPos);
@@ -867,7 +870,7 @@ void Treecode<real_t>::buildTree(const int nLeaf)
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(treeBuild::d_node_max, &node_max, sizeof(int), 0, cudaMemcpyHostToDevice));
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(treeBuild::d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
 
-  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
+//  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
 
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<16,real_t,true>,  cudaFuncCachePreferShared));
   CUDA_SAFE_CALL(cudaFuncSetCacheConfig(&treeBuild::buildOctant<16,real_t,false>, cudaFuncCachePreferShared));
