@@ -1585,7 +1585,7 @@ void testTree(const int n, const unsigned int seed)
   d_cellDataList.alloc(cell_max);
   CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_cell_max, &cell_max, sizeof(int), 0, cudaMemcpyHostToDevice));
 
-  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
+//  cudaDeviceSetLimit(cudaLimitDevRuntimePendingLaunchCount,16384);
 
   /* prefer shared memory for kernels */
 
@@ -1666,7 +1666,7 @@ int main(int argc, char * argv [])
 
 
 #ifndef NPERLEAF
-  const int NLEAF = 16;
+  const int NLEAF = 32;
 #else
   const int NLEAF = NPERLEAF;
 #endif
