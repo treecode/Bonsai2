@@ -5,6 +5,13 @@ int main(int argc, char * argv[])
   std::string fileName = "";
   int seed = 19810614;
   int nPtcl = -1;
+
+  typedef float real_t;
+
+  real_t eps   = 0.05;
+  real_t theta = 0.75;
+  int nLeaf = 64;
+  int nGroup = 64;
   {
     AnyOption opt;
 #define ADDUSAGE(line) {{std::stringstream oss; oss << line; opt.addUsage(oss.str());}}
@@ -15,6 +22,10 @@ int main(int argc, char * argv[])
 		ADDUSAGE(" -i  --infile #         Input snapshot filename [tipsy format]");
     ADDUSAGE(" -n  --plummer #        Generate plummer model with a given number of particles");
     ADDUSAGE(" -s  --seed    #        Random seed [" << seed << "]"); 
+    ADDUSAGE(" -l  --nleaf   #        Number of particles in leaf (16,24,32,48,64) [" << nLeaf << "]");
+    ADDUSAGE(" -g  --ngroup  #        Number of particles in group [" << nGroup << "]");
+    ADDUSAGE(" -o  --theta   #        Opening angle [" << theta << "]");
+    ADDUSAGE(" -e  --eps     #        Softining  [" << eps << "]");
 		ADDUSAGE(" ");
 #undef  ADDUSAGE
 
@@ -22,6 +33,10 @@ int main(int argc, char * argv[])
     opt.setOption( "infile",  'i');
 		opt.setOption( "plummer", 'n' );
 		opt.setOption( "seed", 's' );
+		opt.setOption( "nleaf", 'l' );
+		opt.setOption( "ngroup", 'g' );
+		opt.setOption( "theta", 'o' );
+		opt.setOption( "eps", 'e' );
 		
     opt.processCommandArgs( argc, argv );
 
@@ -35,13 +50,16 @@ int main(int argc, char * argv[])
     if ((optarg = opt.getValue("plummer"))) nPtcl = atoi(optarg);
     if ((optarg = opt.getValue("seed")))    seed = atoi(optarg);
     if ((optarg = opt.getValue("infile")))  fileName = std::string(optarg);
+    if ((optarg = opt.getValue("nleaf")))   nLeaf = atoi(optarg);
+    if ((optarg = opt.getValue("ngroup")))  nGroup = atoi(optarg);
+    if ((optarg = opt.getValue("theta")))   theta = atof(optarg);
+    if ((optarg = opt.getValue("eps")))     eps = atof(optarg);
   }
 
-  typedef float real_t;
+  assert(nLeaf == 16 || nLeaf == 24 || nLeaf == 32 || nLeaf == 48 || nLeaf == 64);
+
   typedef Treecode<real_t> Tree;
 
-  const real_t eps   = 0.05;
-  const real_t theta = 0.75;
   Tree tree(eps, theta);
 
   if (nPtcl > 0)
@@ -119,9 +137,9 @@ int main(int argc, char * argv[])
   tree.ptcl_h2d();
 
   const double t0 = rtc();
-  tree.buildTree(64);          /* pass nLeaf, accepted 16, 24, 32, 48, 64 */
+  tree.buildTree(nLeaf);          /* pass nLeaf, accepted 16, 24, 32, 48, 64 */
   tree.computeMultipoles();
-  tree.makeGroups(5, 64);     /* pass nCrit */
+  tree.makeGroups(5, nGroup);     /* pass nCrit */
 #if 1
   for (int k = 0; k < 1; k++)
   {
