@@ -6,14 +6,14 @@ template<typename real_t>
 static __device__ __forceinline__ real_t shfl_xor(const real_t x, const int lane, const int warpSize = WARP_SIZE);
 
   template<>
-static __device__ __forceinline__ double shfl_xor<double>(const double x, const int lane, const int warpSize)
+ __device__ __forceinline__ double shfl_xor<double>(const double x, const int lane, const int warpSize)
 {
   return __hiloint2double(
       __shfl_xor(__double2hiint(x), lane, warpSize),
       __shfl_xor(__double2loint(x), lane, warpSize));
 }
   template<>
-static __device__ __forceinline__ float shfl_xor<float>(const float x, const int lane, const int warpSize)
+ __device__ __forceinline__ float shfl_xor<float>(const float x, const int lane, const int warpSize)
 {
   return __shfl_xor(x, lane, warpSize);
 }
